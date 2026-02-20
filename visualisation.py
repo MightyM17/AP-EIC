@@ -341,9 +341,9 @@ def plot_qq(series: pd.Series, dist_name: str, title: str):
 # -----------------------------
 st.sidebar.header("Data source")
 
-default_xlsx = "EIC-AIssist_peer_review_synth_v2.xlsx"
-default_paper_csv = "EIC-AIssist_PaperHeader_v2.csv"
-default_reviewer_csv = "EIC-AIssist_ReviewerRows_v2.csv"
+default_xlsx = "EIC-AIssist_peer_review_synth_v6.xlsx"
+default_paper_csv = "EIC-AIssist_PaperHeader_v6.csv"
+default_reviewer_csv = "EIC-AIssist_ReviewerRows_v6.csv"
 
 # initialize session state keys
 if "paper_df" not in st.session_state:
