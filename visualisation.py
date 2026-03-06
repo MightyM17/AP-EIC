@@ -341,9 +341,9 @@ def plot_qq(series: pd.Series, dist_name: str, title: str):
 # -----------------------------
 st.sidebar.header("Data source")
 
-default_xlsx = "EIC-AIssist_peer_review_synth_v6.xlsx"
-default_paper_csv = "EIC-AIssist_PaperHeader_v6.csv"
-default_reviewer_csv = "EIC-AIssist_ReviewerRows_v6.csv"
+default_xlsx = "EIC-AIssist_peer_review_synth_v7.xlsx"
+default_paper_csv = "EIC-AIssist_PaperHeader_v7.csv"
+default_reviewer_csv = "EIC-AIssist_ReviewerRows_v7.csv"
 
 # initialize session state keys
 if "paper_df" not in st.session_state:
@@ -488,8 +488,8 @@ rev_f = multiselect_filter(rev_f, outcome_col, "Invite outcome")
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables = st.tabs(
-    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables"]
+tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic = st.tabs(
+    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables", "EIC"]
 )
 
 
@@ -828,3 +828,267 @@ with tab_tables:
 
 
 st.caption("Tip: Use the 'Heavy-tail fits' tab to see whether your lognormal tails look right (overlay + Q-Q).")
+
+
+# ==========================================================
+# NEW TAB (DOES NOT TOUCH YOUR OLD CODE):
+# EIC POV — “How many days a paper is in review?”
+#
+# Why this design (user-friendly + reliable):
+# - Click-on-bars is flaky in Streamlit unless you add custom components.
+# - So we use a RANGE SLIDER (acts like “click-to-filter” but always works),
+#   plus a simple paper picker to drill down into reviewer status.
+#
+# Requirements: only pandas + plotly + streamlit (already in your app).
+# Put this AFTER your data is loaded (paper_df, rev_df exist) and AFTER
+# your existing tabs are created. Just add this as an extra tab.
+# ==========================================================
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+
+# -----------------------------
+# Helper: safe datetime parsing
+# -----------------------------
+def _to_dt(df, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+# -----------------------------
+# Helper: compute EIC-phase durations (days)
+# -----------------------------
+def _add_eic_durations(paper):
+    paper = paper.copy()
+    paper = _to_dt(
+        paper,
+        [
+            "DatePaperSubmitted",
+            "DateReviewersFullyAssigned",
+            "DateFirstReviewReceived",
+            "DateAllReviewsReceived",
+            "AE_RecommendationDate",
+            "EIC_DecisionDate",
+            "DateDecisionLetterSent",
+        ],
+    )
+
+    # “In review” (EIC POV): from “fully assigned” to “all reviews received”
+    if "D_ReviewPhase" not in paper.columns:
+        if "DateAllReviewsReceived" in paper.columns and "DateReviewersFullyAssigned" in paper.columns:
+            paper["D_ReviewPhase"] = (paper["DateAllReviewsReceived"] - paper["DateReviewersFullyAssigned"]).dt.days
+
+    # Optional extra phases (helpful context)
+    if "D_AssignPhase" not in paper.columns:
+        if "DateReviewersFullyAssigned" in paper.columns and "DatePaperSubmitted" in paper.columns:
+            paper["D_AssignPhase"] = (paper["DateReviewersFullyAssigned"] - paper["DatePaperSubmitted"]).dt.days
+
+    if "D_AEPhase" not in paper.columns:
+        if "AE_RecommendationDate" in paper.columns and "DateAllReviewsReceived" in paper.columns:
+            paper["D_AEPhase"] = (paper["AE_RecommendationDate"] - paper["DateAllReviewsReceived"]).dt.days
+
+    if "D_EICPhase" not in paper.columns:
+        if "EIC_DecisionDate" in paper.columns and "AE_RecommendationDate" in paper.columns:
+            paper["D_EICPhase"] = (paper["EIC_DecisionDate"] - paper["AE_RecommendationDate"]).dt.days
+
+    if "TotalTime_SubmissionToDecision_Days" not in paper.columns:
+        if "DateDecisionLetterSent" in paper.columns and "DatePaperSubmitted" in paper.columns:
+            paper["TotalTime_SubmissionToDecision_Days"] = (
+                (paper["DateDecisionLetterSent"] - paper["DatePaperSubmitted"]).dt.days
+            )
+
+    return paper
+
+
+# -----------------------------
+# Helper: reviewer status (simple + readable)
+# -----------------------------
+def _add_reviewer_status(rev):
+    rev = rev.copy()
+    # ensure expected cols exist
+    if "InviteOutcome" in rev.columns:
+        rev["InviteOutcome"] = rev["InviteOutcome"].astype(str)
+    else:
+        rev["InviteOutcome"] = ""
+
+    rev = _to_dt(rev, ["DateInvitationAccepted", "DateReviewSubmitted", "DateReviewDue", "DateReviewerInvited"])
+
+    if "LateSubmissionFlag" in rev.columns:
+        rev["LateSubmissionFlag"] = rev["LateSubmissionFlag"].astype(str)
+    else:
+        rev["LateSubmissionFlag"] = ""
+
+    def status_row(r):
+        if r["InviteOutcome"] != "accept":
+            return r["InviteOutcome"]  # decline / no_response
+        if pd.isna(r["DateReviewSubmitted"]):
+            return "accepted_not_submitted"
+        if r["LateSubmissionFlag"].lower() == "yes":
+            return "submitted_late"
+        return "submitted_on_time"
+
+    rev["ReviewerStatus"] = rev.apply(status_row, axis=1)
+    return rev
+
+
+# ==========================================================
+# Add a NEW TAB (keep your old tabs unchanged)
+# ==========================================================
+# If you already have tabs like: tab_overview, tab_focus, tab_distributions, ...
+# just add one more tab name to your st.tabs([...]) list.
+#
+# Example:
+# tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic = st.tabs([...,"EIC POV"])
+#
+# Below assumes you created `tab_eic` as the new tab object.
+# ==========================================================
+
+# --- NEW TAB CONTENT ---
+with tab_eic:
+    st.subheader("EIC POV: How many days a paper is in review")
+
+    # Build clean working copies
+    paper = _add_eic_durations(paper_df)
+    rev = _add_reviewer_status(rev_df)
+
+    # Pick the main metric
+    metric = st.radio(
+        "Metric",
+        options=[
+            "D_ReviewPhase",                   # EIC POV: in review
+            "D_AssignPhase",                   # submit -> reviewers assigned
+            "D_AEPhase",                       # all reviews -> AE rec
+            "D_EICPhase",                      # AE rec -> EIC decision
+            "TotalTime_SubmissionToDecision_Days",
+        ],
+        index=0,
+        horizontal=True,
+    )
+
+    if metric not in paper.columns:
+        st.error(f"Column '{metric}' not found / cannot be computed from available dates.")
+        st.stop()
+
+    # Clean values
+    x = pd.to_numeric(paper[metric], errors="coerce")
+    x = x[(x.notna()) & np.isfinite(x)]
+    x = x[x >= 0]
+
+    if len(x) == 0:
+        st.info("No valid values for this metric (check missing dates).")
+        st.stop()
+
+    # Friendly range selector (reliable alternative to click-a-bar)
+    p99 = int(np.nanpercentile(x, 99))
+    cap = st.slider("Cap max days (for visualization)", min_value=14, max_value=max(30, p99), value=max(30, min(120, p99)))
+    x_cap = x[x <= cap]
+
+    # Bin width selector
+    bin_width = st.selectbox("Bin width (days)", [3, 5, 7, 10, 14], index=2)
+
+    # Range slider = “click-to-filter”
+    low_default = 0
+    high_default = min(21, cap)
+    low_high = st.slider("Filter range (days)", min_value=0, max_value=int(cap), value=(low_default, high_default), step=1)
+    low, high = int(low_high[0]), int(low_high[1])
+
+    # Histogram
+    fig = px.histogram(
+        paper.assign(_metric=pd.to_numeric(paper[metric], errors="coerce")),
+        x="_metric",
+        nbins=max(5, int(cap / bin_width)),
+        title=f"{metric} distribution (use the range slider to drill down)",
+    )
+    # Highlight selected range
+    fig.add_vrect(x0=low, x1=high, opacity=0.15, line_width=0)
+    fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
+    fig.update_xaxes(range=[0, cap], title="Days")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Filtered subset of papers in selected range
+    paper["_metric"] = pd.to_numeric(paper[metric], errors="coerce")
+    subset = paper[(paper["_metric"].notna()) & (paper["_metric"] >= low) & (paper["_metric"] <= high)].copy()
+
+    # Summary stats
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Paper-rounds in range", f"{len(subset):,}")
+    c2.metric("Median days", f"{subset['_metric'].median():.0f}")
+    c3.metric("P90 days", f"{subset['_metric'].quantile(0.90):.0f}")
+    c4.metric("Max days", f"{subset['_metric'].max():.0f}")
+
+    st.divider()
+
+    # EIC backlog snapshot (helps EIC understand load)
+    if "HandlingEIC_ID" in subset.columns:
+        eic_summary = (
+            subset.groupby("HandlingEIC_ID")["_metric"]
+            .agg(count="count", median="median", p90=lambda s: s.quantile(0.90))
+            .reset_index()
+            .sort_values(["p90", "median", "count"], ascending=False)
+        )
+        st.markdown("#### EIC backlog summary (within selected range)")
+        st.dataframe(eic_summary, use_container_width=True, height=220)
+
+    st.markdown("#### Drilldown: pick a paper-round and see reviewer statuses")
+
+    # Pick paper + round (simple & reliable)
+    if "PaperID" not in subset.columns or "SubmissionRound" not in subset.columns:
+        st.warning("Missing PaperID/SubmissionRound for drilldown.")
+        st.stop()
+
+    # Build a compact identifier list
+    subset["paper_round_key"] = subset["PaperID"].astype(str) + " | round " + subset["SubmissionRound"].astype(int).astype(str)
+    choices = subset["paper_round_key"].drop_duplicates().tolist()
+
+    if len(choices) == 0:
+        st.info("No paper-rounds found in this range.")
+        st.stop()
+
+    picked = st.selectbox("Select a paper-round", choices)
+    picked_pid = picked.split("|")[0].strip()
+    picked_round = int(picked.split("round")[1].strip())
+
+    # Show paper row (timeline)
+    show_cols = [
+        "PaperID","SubmissionRound","JournalSection","PaperStatusOnSubmission",
+        "HandlingAssociateEditorID","HandlingEIC_ID",
+        "DatePaperSubmitted","DateReviewersFullyAssigned","DateAllReviewsReceived",
+        "AE_RecommendationDate","AE_Recommendation",
+        "EIC_DecisionDate","EIC_Decision",
+        "DateDecisionLetterSent",
+        "D_AssignPhase","D_ReviewPhase","D_AEPhase","D_EICPhase",
+        "TotalTime_SubmissionToDecision_Days"
+    ]
+    show_cols = [c for c in show_cols if c in paper.columns]
+
+    one = paper[(paper["PaperID"] == picked_pid) & (paper["SubmissionRound"] == picked_round)].copy()
+    st.dataframe(one[show_cols], use_container_width=True)
+
+    # Reviewer rows for that paper-round
+    rr = rev[(rev["PaperID"] == picked_pid) & (rev["SubmissionRound"] == picked_round)].copy()
+    if len(rr) == 0:
+        st.info("No reviewer rows for this paper-round.")
+        st.stop()
+
+    # Status breakdown
+    status_counts = rr["ReviewerStatus"].value_counts().reset_index()
+    status_counts.columns = ["ReviewerStatus", "count"]
+
+    fig2 = px.bar(status_counts, x="ReviewerStatus", y="count", title="Reviewer status breakdown")
+    fig2.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10))
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # Show reviewers table (EIC-friendly: who is blocking)
+    rr_cols = [
+        "ReviewerID","ReviewerType","ReviewerReliabilityTier","ReviewerWorkloadAtInvite",
+        "InviteOutcome","DateReviewerInvited","DateInvitationAccepted","DateReviewDue","DateReviewSubmitted",
+        "LateSubmissionFlag","NumRemindersSent","ReviewerStatus"
+    ]
+    rr_cols = [c for c in rr_cols if c in rr.columns]
+    st.dataframe(rr[rr_cols].sort_values(["ReviewerStatus","InviteOutcome"], ascending=[True, True]),
+                 use_container_width=True, height=420)
