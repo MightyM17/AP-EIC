@@ -488,8 +488,8 @@ rev_f = multiselect_filter(rev_f, outcome_col, "Invite outcome")
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic = st.tabs(
-    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables", "EIC"]
+tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic, tab_paper_timeline = st.tabs(
+    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables", "EIC", "Paper timeline"]
 )
 
 
@@ -1091,4 +1091,350 @@ with tab_eic:
     ]
     rr_cols = [c for c in rr_cols if c in rr.columns]
     st.dataframe(rr[rr_cols].sort_values(["ReviewerStatus","InviteOutcome"], ascending=[True, True]),
+                 use_container_width=True, height=420)
+
+def _to_dt(df, cols):
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+def _abbr_decision(d: str) -> str:
+    d = str(d).strip().lower()
+    m = {
+        "accept": "ACC",
+        "minor revision": "MIN",
+        "major revision": "MAJ",
+        "submit as new": "SNEW",
+        "reject": "REJ",
+    }
+    return m.get(d, "")
+
+
+def _build_segments_and_markers(rr: pd.DataFrame, end_anchor: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Returns:
+      seg_df: bars for invite/review/overdue for accepted + decline
+      noresp_df: markers for no_response only (single timestamp)
+      decision_df: markers at review submission date (with decision/sentiment/etc.)
+    """
+    segments = []
+    noresp = []
+    decisions = []
+
+    for _, r in rr.iterrows():
+        rid = str(r.get("ReviewerID", ""))
+        outcome = str(r.get("InviteOutcome", "")).strip()
+
+        inv = r.get("DateReviewerInvited", pd.NaT)
+        res = r.get("DateInvitationResolved", pd.NaT)
+        acc = r.get("DateInvitationAccepted", pd.NaT)
+        due = r.get("DateReviewDue", pd.NaT)
+        sub = r.get("DateReviewSubmitted", pd.NaT)
+
+        rating = str(r.get("ReviewerPaperRating", "")).strip()
+        sent = r.get("ReviewSentiment_1to5", "")
+        wc = r.get("ReviewLengthWords", "")
+        rem = r.get("NumRemindersSent", "")
+
+        if pd.isna(inv):
+            continue
+
+        # ---- NO RESPONSE: marker only (no finish date)
+        if outcome == "no_response":
+            noresp.append({
+                "ReviewerID": rid,
+                "At": inv,
+                "Label": "NO RESPONSE",
+            })
+            continue
+
+        # Resolve fallback (if missing)
+        if pd.isna(res):
+            res = inv + pd.Timedelta(days=7)
+
+        # ---- DECLINE: can show a short bar from invite -> resolved
+        if outcome == "decline":
+            segments.append({
+                "ReviewerID": rid,
+                "Stage": "Declined",
+                "Start": inv,
+                "Finish": res,
+            })
+            continue
+
+        # ---- ACCEPT path
+        if pd.isna(acc):
+            acc = res
+
+        # Invite pending
+        if acc >= inv:
+            segments.append({
+                "ReviewerID": rid,
+                "Stage": "Invite pending",
+                "Start": inv,
+                "Finish": acc,
+            })
+
+        # If never submitted
+        if pd.isna(sub):
+            if not pd.isna(due) and due >= acc:
+                # on-time window
+                segments.append({
+                    "ReviewerID": rid,
+                    "Stage": "Review (on-time window)",
+                    "Start": acc,
+                    "Finish": due,
+                })
+                # overdue window until anchor (or due+14)
+                end2 = min(end_anchor, due + pd.Timedelta(days=14)) if pd.notna(end_anchor) else due + pd.Timedelta(days=14)
+                if end2 > due:
+                    segments.append({
+                        "ReviewerID": rid,
+                        "Stage": "Overdue (no submission)",
+                        "Start": due,
+                        "Finish": end2,
+                    })
+            else:
+                # no due -> review in progress until anchor
+                if end_anchor > acc:
+                    segments.append({
+                        "ReviewerID": rid,
+                        "Stage": "Review (in progress)",
+                        "Start": acc,
+                        "Finish": end_anchor,
+                    })
+            # no decision marker because no submission
+            continue
+
+        # Submitted: on-time vs overdue parts
+        if not pd.isna(due) and due >= acc:
+            end1 = min(due, sub)
+            if end1 > acc:
+                segments.append({
+                    "ReviewerID": rid,
+                    "Stage": "Review (on-time window)",
+                    "Start": acc,
+                    "Finish": end1,
+                })
+            if sub > due:
+                segments.append({
+                    "ReviewerID": rid,
+                    "Stage": "Overdue",
+                    "Start": due,
+                    "Finish": sub,
+                })
+        else:
+            if sub > acc:
+                segments.append({
+                    "ReviewerID": rid,
+                    "Stage": "Review (in progress)",
+                    "Start": acc,
+                    "Finish": sub,
+                })
+
+        # Decision marker at submission date
+        decisions.append({
+            "ReviewerID": rid,
+            "At": sub,
+            "Decision": rating,
+            "DecisionAbbr": _abbr_decision(rating),
+            "Sentiment": sent,
+            "Words": wc,
+            "Reminders": rem,
+        })
+
+    seg_df = pd.DataFrame(segments)
+    noresp_df = pd.DataFrame(noresp)
+    decision_df = pd.DataFrame(decisions)
+    return seg_df, noresp_df, decision_df
+
+
+# ==========================================================
+# TAB BODY
+# ==========================================================
+with tab_paper_timeline:
+    st.subheader("Paper → Reviewer Timeline (color-coded stages)")
+
+    paper = _to_dt(
+        paper_df,
+        [
+            "DatePaperSubmitted", "DateReviewersFullyAssigned", "DateAllReviewsReceived",
+            "DateDecisionLetterSent"
+        ],
+    )
+    rev = _to_dt(
+        rev_df,
+        [
+            "DateReviewerInvited", "DateInvitationResolved", "DateInvitationAccepted",
+            "DateReviewDue", "DateReviewSubmitted"
+        ],
+    )
+
+    if "PaperID" not in paper.columns or "SubmissionRound" not in paper.columns:
+        st.error("PaperHeader must include PaperID and SubmissionRound.")
+        st.stop()
+    if "PaperID" not in rev.columns or "SubmissionRound" not in rev.columns:
+        st.error("ReviewerRows must include PaperID and SubmissionRound.")
+        st.stop()
+
+    # Paper-round selector (simple + always works)
+    paper = paper.copy()
+    paper["paper_round_key"] = paper["PaperID"].astype(str) + " | round " + paper["SubmissionRound"].astype(int).astype(str)
+    picked = st.selectbox("Select a paper-round", paper["paper_round_key"].drop_duplicates().tolist())
+    pid = picked.split("|")[0].strip()
+    rnd = int(picked.split("round")[1].strip())
+
+    one = paper[(paper["PaperID"] == pid) & (paper["SubmissionRound"].astype(int) == rnd)].copy()
+    if len(one) == 0:
+        st.warning("Paper-round not found.")
+        st.stop()
+    p = one.iloc[0]
+
+    # PAPER SUMMARY (NO AE/EIC decisions shown)
+    header_cols = [
+        "PaperID", "SubmissionRound", "JournalSection", "PaperStatusOnSubmission",
+        "DatePaperSubmitted", "DateReviewersFullyAssigned", "DateAllReviewsReceived",
+        "DateDecisionLetterSent", "TotalTime_SubmissionToDecision_Days"
+    ]
+    header_cols = [c for c in header_cols if c in one.columns]
+    st.markdown("#### Paper summary")
+    st.dataframe(one[header_cols], use_container_width=True)
+
+    rr = rev[(rev["PaperID"] == pid) & (rev["SubmissionRound"].astype(int) == rnd)].copy()
+    if len(rr) == 0:
+        st.info("No reviewer rows for this paper-round.")
+        st.stop()
+
+    # Build an end anchor for unfinished bars
+    end_anchor = p.get("DateDecisionLetterSent", pd.NaT)
+    if pd.isna(end_anchor):
+        end_anchor = p.get("DateAllReviewsReceived", pd.NaT)
+    if pd.isna(end_anchor):
+        end_anchor = p.get("DateReviewersFullyAssigned", pd.NaT)
+    if pd.isna(end_anchor):
+        end_anchor = p.get("DatePaperSubmitted", pd.NaT)
+    if pd.isna(end_anchor):
+        end_anchor = pd.Timestamp.today().normalize()
+
+    seg_df, noresp_df, decision_df = _build_segments_and_markers(rr, end_anchor)
+
+    if len(seg_df) == 0 and len(noresp_df) == 0:
+        st.info("Not enough timeline data to draw.")
+        st.stop()
+
+    # Colors
+    color_map = {
+        "Invite pending": "#4C78A8",
+        "Review (on-time window)": "#54A24B",
+        "Review (in progress)": "#72B7B2",
+        "Overdue": "#F58518",
+        "Overdue (no submission)": "#E45756",
+        "Declined": "#9D9D9D",
+    }
+
+    st.markdown("#### Reviewer timeline (color-coded stages)")
+    fig = px.timeline(
+        seg_df,
+        x_start="Start",
+        x_end="Finish",
+        y="ReviewerID",
+        color="Stage",
+        color_discrete_map=color_map,
+        title="Stages per reviewer (Invite → Accept → Review → Overdue / Outcome)",
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(height=560, margin=dict(l=10, r=10, t=60, b=10), legend_title_text="Stage")
+
+    # Add NO RESPONSE markers (single point)
+    if len(noresp_df) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=noresp_df["At"],
+                y=noresp_df["ReviewerID"],
+                mode="markers+text",
+                text=["NO RESP"] * len(noresp_df),
+                textposition="middle right",
+                marker=dict(symbol="x", size=10),
+                name="No response",
+                hovertemplate="Reviewer=%{y}<br>Status=No response<br>Invite sent=%{x}<extra></extra>",
+            )
+        )
+
+    # Add DECISION markers at submission date
+    if len(decision_df) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=decision_df["At"],
+                y=decision_df["ReviewerID"],
+                mode="markers+text",
+                text=decision_df["DecisionAbbr"],
+                textposition="middle right",
+                marker=dict(symbol="circle", size=8),
+                name="Reviewer decision",
+                customdata=np.stack(
+                    [
+                        decision_df["Decision"].astype(str),
+                        decision_df["Sentiment"].astype(str),
+                        decision_df["Words"].astype(str),
+                        decision_df["Reminders"].astype(str),
+                    ],
+                    axis=1,
+                ),
+                hovertemplate=(
+                    "Reviewer=%{y}<br>"
+                    "Submitted=%{x}<br>"
+                    "Decision=%{customdata[0]}<br>"
+                    "Sentiment=%{customdata[1]}<br>"
+                    "Words=%{customdata[2]}<br>"
+                    "Reminders=%{customdata[3]}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Add ONLY non-decision milestones (no AE/EIC decisions)
+    milestone_lines = [
+        ("Submitted", p.get("DatePaperSubmitted", pd.NaT)),
+        ("Fully assigned", p.get("DateReviewersFullyAssigned", pd.NaT)),
+        ("All reviews received", p.get("DateAllReviewsReceived", pd.NaT)),
+        ("Decision letter", p.get("DateDecisionLetterSent", pd.NaT)),
+    ]
+    for label, dt in milestone_lines:
+        if pd.notna(dt):
+            fig.add_vline(x=dt, line_width=1, line_dash="dot")
+            fig.add_annotation(
+                x=dt, y=1.02, xref="x", yref="paper",
+                text=label, showarrow=False, font=dict(size=10)
+            )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Reviewer decision breakdown (simple)
+    if "ReviewerPaperRating" in rr.columns:
+        dec = rr[(rr["InviteOutcome"].astype(str) == "accept") & (rr["ReviewerPaperRating"].astype(str).str.len() > 0)]
+        if len(dec) > 0:
+            st.markdown("#### Reviewer decision breakdown (submitted reviews)")
+            vc = dec["ReviewerPaperRating"].astype(str).value_counts().reset_index()
+            vc.columns = ["Decision", "Count"]
+            st.plotly_chart(px.bar(vc, x="Decision", y="Count", height=320), use_container_width=True)
+
+    # Table (keep outcomes + durations + decisions)
+    st.markdown("#### Reviewer details (durations + outcomes + decision)")
+    rr2 = rr.copy()
+    rr2["InviteToResolved_days"] = (rr2["DateInvitationResolved"] - rr2["DateReviewerInvited"]).dt.days
+    rr2["InviteToAccept_days"] = (rr2["DateInvitationAccepted"] - rr2["DateReviewerInvited"]).dt.days
+    rr2["AcceptToSubmit_days"] = (rr2["DateReviewSubmitted"] - rr2["DateInvitationAccepted"]).dt.days
+    rr2["Overdue_days"] = (rr2["DateReviewSubmitted"] - rr2["DateReviewDue"]).dt.days
+
+    show_cols = [
+        "ReviewerID","ReviewerType","ReviewerReliabilityTier","ReviewerWorkloadAtInvite",
+        "InviteOutcome","InviteToResolved_days","InviteToAccept_days","AcceptToSubmit_days","Overdue_days",
+        "NumRemindersSent","ReviewSentiment_1to5","ReviewerPaperRating","ReviewLengthWords",
+        "DateReviewerInvited","DateInvitationAccepted","DateReviewDue","DateReviewSubmitted",
+    ]
+    show_cols = [c for c in show_cols if c in rr2.columns]
+    st.dataframe(rr2[show_cols].sort_values(["InviteOutcome","Overdue_days"], ascending=[True, False]),
                  use_container_width=True, height=420)
