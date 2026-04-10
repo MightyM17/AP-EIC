@@ -341,9 +341,9 @@ def plot_qq(series: pd.Series, dist_name: str, title: str):
 # -----------------------------
 st.sidebar.header("Data source")
 
-default_xlsx = "EIC-AIssist_peer_review_synth_v9.xlsx"
-default_paper_csv = "EIC-AIssist_PaperHeader_v9.csv"
-default_reviewer_csv = "EIC-AIssist_ReviewerRows_v9.csv"
+default_xlsx = "EIC-AIssist_peer_review_synth_v10.xlsx"
+default_paper_csv = "EIC-AIssist_PaperHeader_v10.csv"
+default_reviewer_csv = "EIC-AIssist_ReviewerRows_v10.csv"
 
 # initialize session state keys
 if "paper_df" not in st.session_state:
@@ -1293,46 +1293,79 @@ def _days_since(base, dt):
     return (dt - base).total_seconds() / 86400.0
 
 
+#PAPER TIMELINE TAB ONLY.
 with tab_paper_timeline:
+#LOCAL imports.
     import numpy as np
+#LOCAL imports.
     import pandas as pd
+#LOCAL imports.
     import plotly.graph_objects as go
+#LOCAL imports.
     import streamlit as st
 
+#TITLE.
     st.subheader("Paper timeline (reviewers + phases + reminders + decisions)")
 
+#HELPER: safe datetime parsing.
     def _pt_to_dt(df, cols):
+#COPY.
         df = df.copy()
+#PARSE requested cols.
         for c in cols:
+#CHECK exists.
             if c in df.columns:
+#CONVERT.
                 df[c] = pd.to_datetime(df[c], errors="coerce")
+#RETURN parsed copy.
         return df
 
+#HELPER: numeric days since paper submission.
     def _pt_days(base, dt):
+#MISSING guard.
         if pd.isna(base) or pd.isna(dt):
+#RETURN nan.
             return np.nan
+#RETURN float days.
         return (dt - base).total_seconds() / 86400.0
 
+#HELPER: decision level for visual marker size.
     def _pt_level(dec):
+#NORMALIZE.
         dec = str(dec).strip().lower()
+#MAP levels.
         m = {"reject": 1, "submit as new": 2, "major revision": 3, "minor revision": 4, "accept": 5}
+#RETURN mapped level.
         return m.get(dec, None)
 
+#HELPER: short reviewer decision label.
     def _pt_abbr(dec):
+#NORMALIZE.
         dec = str(dec).strip().lower()
+#MAP abbreviations.
         m = {"reject": "REJ", "submit as new": "SNEW", "major revision": "MAJ", "minor revision": "MIN", "accept": "ACC"}
+#RETURN text.
         return m.get(dec, "")
 
+#USE filtered paper df if available.
     try:
+#SOURCE.
         _paper_src = paper_f
+#FALLBACK.
     except NameError:
+#SOURCE fallback.
         _paper_src = paper_df
 
+#USE filtered reviewer df if available.
     try:
+#SOURCE.
         _rev_src = rev_f
+#FALLBACK.
     except NameError:
+#SOURCE fallback.
         _rev_src = rev_df
 
+#PARSE paper dates.
     paper = _pt_to_dt(
         _paper_src,
         [
@@ -1345,6 +1378,7 @@ with tab_paper_timeline:
         ],
     )
 
+#PARSE reviewer dates.
     rev = _pt_to_dt(
         _rev_src,
         [
@@ -1355,45 +1389,73 @@ with tab_paper_timeline:
             "DateNoResponseTerminal",
             "DateReviewDue",
             "DateReviewSubmitted",
+            "AE_RecommendationDateAtEnd",
+            "EIC_DecisionDateAtEnd",
+            "DateDecisionLetterSentAtEnd",
         ],
     )
 
+#GUARD required paper cols.
     if ("PaperID" not in paper.columns) or ("SubmissionRound" not in paper.columns) or ("DatePaperSubmitted" not in paper.columns):
+#ERROR.
         st.error("PaperHeader must contain PaperID, SubmissionRound, DatePaperSubmitted.")
+#STOP.
         st.stop()
 
+#GUARD required reviewer cols.
     if ("PaperID" not in rev.columns) or ("SubmissionRound" not in rev.columns) or ("ReviewerID" not in rev.columns) or ("InviteOutcome" not in rev.columns) or ("DateReviewerInvited" not in rev.columns):
+#ERROR.
         st.error("ReviewerRows must contain PaperID, SubmissionRound, ReviewerID, InviteOutcome, DateReviewerInvited.")
+#STOP.
         st.stop()
 
+#BUILD selector key.
     paper = paper.copy()
+#DISPLAY key.
     paper["paper_round_key"] = paper["PaperID"].astype(str) + " | round " + paper["SubmissionRound"].astype(int).astype(str)
 
+#EMPTY guard.
     if paper.empty:
+#INFO.
         st.info("No papers match current filters. Relax filters to view a timeline.")
+#STOP.
         st.stop()
 
+#PICK paper-round.
     picked = st.selectbox("Select a paper-round", paper["paper_round_key"].drop_duplicates().tolist())
 
+#PARSE paper id.
     pid = picked.split("|")[0].strip()
+#PARSE round.
     rnd = int(picked.split("round")[1].strip())
 
+#GET selected paper row.
     one = paper[(paper["PaperID"] == pid) & (paper["SubmissionRound"].astype(int) == rnd)].copy()
 
+#GUARD not found.
     if one.empty:
+#WARN.
         st.warning("Paper-round not found after filtering.")
+#STOP.
         st.stop()
 
+#SELECT row.
     p = one.iloc[0]
 
+#BASE date.
     base_date = p["DatePaperSubmitted"]
 
+#GUARD base date.
     if pd.isna(base_date):
+#ERROR.
         st.error("Selected paper-round has no DatePaperSubmitted.")
+#STOP.
         st.stop()
 
+#CAPTION.
     st.caption(f"Base date (submission): {base_date.date().isoformat()} — x-axis shows calendar dates every 21 days")
 
+#SHOW paper timing fields.
     show_cols = [
         "PaperID",
         "SubmissionRound",
@@ -1403,188 +1465,313 @@ with tab_paper_timeline:
         "DateReviewersFullyAssigned",
         "DateAllReviewsReceived",
         "AE_RecommendationDate",
-        "DateDecisionLetterSent",
+        "AE_Recommendation",
         "EIC_DecisionDate",
+        "EIC_Decision",
+        "DateDecisionLetterSent",
+        "FinalDecisionOutcome",
         "TotalTime_SubmissionToDecision_Days",
     ]
 
+#KEEP existing cols only.
     show_cols = [c for c in show_cols if c in one.columns]
 
+#DISPLAY paper summary.
     st.dataframe(one[show_cols], use_container_width=True)
 
+#GET reviewer rows.
     rr = rev[(rev["PaperID"] == pid) & (rev["SubmissionRound"].astype(int) == rnd)].copy()
 
+#GUARD reviewer rows.
     if rr.empty:
+#INFO.
         st.info("No reviewer rows for this paper-round.")
+#STOP.
         st.stop()
 
+#SORT reviewers.
     rr = rr.sort_values(["InviteOutcome", "ReviewerID"], ascending=[True, True]).reset_index(drop=True)
 
+#Y order.
     reviewers = rr["ReviewerID"].astype(str).tolist()
 
+#PAPER-level relative dates.
     ae_line = _pt_days(base_date, p.get("AE_RecommendationDate", pd.NaT))
+#PAPER-level relative dates.
     eic_line = _pt_days(base_date, p.get("EIC_DecisionDate", pd.NaT))
+#PAPER-level relative dates.
     letter_line = _pt_days(base_date, p.get("DateDecisionLetterSent", pd.NaT))
 
+#END anchor for open phases.
     end_anchor = letter_line
-
+#FALLBACK.
     if np.isnan(end_anchor):
+#SET fallback.
         end_anchor = eic_line
-
+#FALLBACK.
     if np.isnan(end_anchor):
+#SET fallback.
         end_anchor = _pt_days(base_date, p.get("DateAllReviewsReceived", pd.NaT))
-
+#FINAL fallback.
     if np.isnan(end_anchor):
+#DEFAULT.
         end_anchor = 60.0
 
+#PHASE colors.
     stage_colors = {
         "Invite phase": "#4C78A8",
         "Review phase": "#54A24B",
-        "AC to EIC phase": "#B279A2",
+        "AE to EIC phase": "#B279A2",
         "Declined": "#9D9D9D",
     }
 
-    stage_data = {"Invite phase": [], "Review phase": [], "AC to EIC phase": [], "Declined": []}
+#COLLECT phase bars with custom hover.
+    stage_data = {"Invite phase": [], "Review phase": [], "AE to EIC phase": [], "Declined": []}
 
+#COLLECT reminder markers.
     rem_x = []
+#COLLECT reminder markers.
     rem_y = []
 
+#COLLECT decision markers.
     dec_x = []
+#COLLECT decision markers.
     dec_y = []
+#COLLECT decision markers.
     dec_size = []
+#COLLECT decision markers.
     dec_text = []
+#COLLECT decision markers.
     dec_hover = []
 
+#REMINDER policy offsets.
     REM1 = 21
+#REMINDER policy offsets.
     REM2 = 42
 
+#TRACK x max.
     xmax = 0.0
 
+#BUILD timeline row by row.
     for _, r in rr.iterrows():
+#REVIEWER id.
         rid = str(r.get("ReviewerID", ""))
+#INVITE outcome.
         outcome = str(r.get("InviteOutcome", "")).strip()
 
+#RELATIVE date positions.
         inv = _pt_days(base_date, r.get("DateReviewerInvited", pd.NaT))
+#RELATIVE date positions.
         acc = _pt_days(base_date, r.get("DateInvitationAccepted", pd.NaT))
+#RELATIVE date positions.
         res = _pt_days(base_date, r.get("DateInvitationResolved", pd.NaT))
+#RELATIVE date positions.
         censor = _pt_days(base_date, r.get("DateNoResponseCensor", pd.NaT))
+#RELATIVE date positions.
         terminal = _pt_days(base_date, r.get("DateNoResponseTerminal", pd.NaT))
+#RELATIVE date positions.
         due = _pt_days(base_date, r.get("DateReviewDue", pd.NaT))
+#RELATIVE date positions.
         sub = _pt_days(base_date, r.get("DateReviewSubmitted", pd.NaT))
 
+#NO RESPONSE: extend invite phase until terminal event.
         if outcome == "no_response":
+#GET terminal outcome.
             terminal_outcome = str(r.get("NoResponseTerminalOutcome", "")).strip()
+#FALLBACK terminal.
             if np.isnan(terminal):
+#USE censor if available.
                 terminal = censor
+#FINAL fallback.
             if np.isnan(terminal):
+#USE anchor.
                 terminal = end_anchor
+#DRAW only if invite exists.
             if not np.isnan(inv):
+#ENSURE positive bar length.
                 bar_end = max(inv + 0.5, terminal)
+#HOVER text.
                 hover_txt = (
                     f"Reviewer={rid}<br>"
                     f"Status=no_response<br>"
                     f"Invite sent={r.get('DateReviewerInvited', '')}<br>"
                     f"Terminal outcome={terminal_outcome if terminal_outcome else 'NA'}<br>"
-                    f"Terminal date={r.get('DateNoResponseTerminal', '') if pd.notna(r.get('DateNoResponseTerminal', pd.NaT)) else 'NA'}"
+                    f"Terminal date={r.get('DateNoResponseTerminal', '') if pd.notna(r.get('DateNoResponseTerminal', pd.NaT)) else 'NA'}<br>"
+                    f"AE suggestion at end={r.get('AE_RecommendationAtEnd', 'NA')}<br>"
+                    f"EIC decision at end={r.get('EIC_DecisionAtEnd', 'NA')}"
                 )
+#APPEND as invite phase.
                 stage_data["Invite phase"].append({"rid": rid, "start": inv, "dur": bar_end - inv, "hover": hover_txt})
+#UPDATE xmax.
                 xmax = max(xmax, bar_end)
+#DONE.
             continue
 
+#DECLINE: invite to resolved.
         if outcome == "decline":
+#FALLBACK resolved date if missing.
             if np.isnan(res) and not np.isnan(inv):
+#SMALL fallback.
                 res = inv + 2.0
+#DRAW if valid.
             if not np.isnan(inv) and not np.isnan(res) and res > inv:
+#HOVER text.
                 hover_txt = (
                     f"Reviewer={rid}<br>"
                     f"Status=decline<br>"
                     f"Invite sent={r.get('DateReviewerInvited', '')}<br>"
-                    f"Declined/Resolved={r.get('DateInvitationResolved', '')}"
+                    f"Declined/Resolved={r.get('DateInvitationResolved', '')}<br>"
+                    f"AE suggestion at end={r.get('AE_RecommendationAtEnd', 'NA')}<br>"
+                    f"EIC decision at end={r.get('EIC_DecisionAtEnd', 'NA')}"
                 )
+#APPEND decline phase.
                 stage_data["Declined"].append({"rid": rid, "start": inv, "dur": res - inv, "hover": hover_txt})
+#UPDATE xmax.
                 xmax = max(xmax, res)
+#DONE.
             continue
 
+#ACCEPT path.
         if outcome == "accept":
+#FALLBACK accept to resolved.
             if np.isnan(acc) and not np.isnan(res):
+#SET fallback.
                 acc = res
+#FINAL fallback.
             if np.isnan(acc) and not np.isnan(inv):
+#SET fallback.
                 acc = inv + 1.0
 
+#INVITE phase.
             if not np.isnan(inv) and not np.isnan(acc) and acc > inv:
+#HOVER text.
                 hover_txt = (
                     f"Reviewer={rid}<br>"
                     f"Status=accept<br>"
                     f"Invite sent={r.get('DateReviewerInvited', '')}<br>"
                     f"Accepted={r.get('DateInvitationAccepted', '')}"
                 )
+#APPEND invite phase.
                 stage_data["Invite phase"].append({"rid": rid, "start": inv, "dur": acc - inv, "hover": hover_txt})
+#UPDATE xmax.
                 xmax = max(xmax, acc)
 
+#REVIEW phase end.
             if not np.isnan(sub):
+#SET review end.
                 review_end = sub
+#ELIF due exists.
             elif not np.isnan(due):
+#SET review end.
                 review_end = min(due, end_anchor)
+#ELSE fallback.
             else:
+#SET review end.
                 review_end = end_anchor
 
+#REVIEW phase.
             if not np.isnan(acc) and review_end > acc:
+#HOVER text.
                 hover_txt = (
                     f"Reviewer={rid}<br>"
                     f"Accepted={r.get('DateInvitationAccepted', '')}<br>"
                     f"Due={r.get('DateReviewDue', '')}<br>"
                     f"Submitted={r.get('DateReviewSubmitted', '') if pd.notna(r.get('DateReviewSubmitted', pd.NaT)) else 'NA'}"
                 )
+#APPEND review phase.
                 stage_data["Review phase"].append({"rid": rid, "start": acc, "dur": review_end - acc, "hover": hover_txt})
+#UPDATE xmax.
                 xmax = max(xmax, review_end)
 
+#REMINDER count.
             n_rem = r.get("NumRemindersSent", 0)
-
+#SAFE cast.
             try:
+#CAST.
                 n_rem = int(n_rem)
+#EXCEPT.
             except Exception:
+#ZERO fallback.
                 n_rem = 0
 
+#REMINDER 1.
             if n_rem > 0 and not np.isnan(acc):
+#POSITION.
                 x1 = acc + REM1
+#KEEP inside phase.
                 if x1 <= review_end:
+#APPEND.
                     rem_x.append(x1)
+#APPEND.
                     rem_y.append(rid)
 
+#REMINDER 2.
             if n_rem > 1 and not np.isnan(acc):
+#POSITION.
                 x2 = acc + REM2
+#KEEP inside phase.
                 if x2 <= review_end:
+#APPEND.
                     rem_x.append(x2)
+#APPEND.
                     rem_y.append(rid)
 
-#NEW PHASE: AC to EIC suggestion phase (replaces old dotted AE line usage).
+#NEW PHASE: reviewer submitted -> AE recommendation (what AE tells EIC).
             if not np.isnan(sub):
-                ac_end = ae_line
-                if np.isnan(ac_end):
-                    ac_end = eic_line
-                if np.isnan(ac_end):
-                    ac_end = end_anchor
-                if not np.isnan(ac_end) and ac_end > sub:
-                    ac_suggestion = str(p.get("AE_Recommendation", ""))
-                    ac_date = p.get("AE_RecommendationDate", pd.NaT)
-                    ac_date_txt = ac_date.date().isoformat() if pd.notna(ac_date) else "NA"
+#END at AE recommendation if present, else EIC decision, else anchor.
+                ae_phase_end = _pt_days(base_date, r.get("AE_RecommendationDateAtEnd", pd.NaT))
+#FALLBACK.
+                if np.isnan(ae_phase_end):
+#USE EIC decision if AE rec missing.
+                    ae_phase_end = _pt_days(base_date, r.get("EIC_DecisionDateAtEnd", pd.NaT))
+#FALLBACK.
+                if np.isnan(ae_phase_end):
+#USE paper anchor.
+                    ae_phase_end = end_anchor
+#DRAW if valid.
+                if not np.isnan(ae_phase_end) and ae_phase_end > sub:
+#GET AE/EIC text.
+                    ae_suggestion = str(r.get("AE_RecommendationAtEnd", ""))
+#GET AE date.
+                    ae_date = r.get("AE_RecommendationDateAtEnd", pd.NaT)
+#FORMAT date.
+                    ae_date_txt = ae_date.date().isoformat() if pd.notna(ae_date) else "NA"
+#GET EIC text.
+                    eic_dec = str(r.get("EIC_DecisionAtEnd", ""))
+#GET EIC date.
+                    eic_date = r.get("EIC_DecisionDateAtEnd", pd.NaT)
+#FORMAT date.
+                    eic_date_txt = eic_date.date().isoformat() if pd.notna(eic_date) else "NA"
+#HOVER text.
                     hover_txt = (
                         f"Reviewer={rid}<br>"
                         f"Review submitted={r.get('DateReviewSubmitted', '')}<br>"
-                        f"AC suggestion to EIC={ac_suggestion if ac_suggestion else 'NA'}<br>"
-                        f"AC recommendation date={ac_date_txt}"
+                        f"AE suggestion to EIC={ae_suggestion if ae_suggestion else 'NA'}<br>"
+                        f"AE recommendation date={ae_date_txt}<br>"
+                        f"EIC decision={eic_dec if eic_dec else 'NA'}<br>"
+                        f"EIC decision date={eic_date_txt}"
                     )
-                    stage_data["AC to EIC phase"].append({"rid": rid, "start": sub, "dur": ac_end - sub, "hover": hover_txt})
-                    xmax = max(xmax, ac_end)
+#APPEND new phase.
+                    stage_data["AE to EIC phase"].append({"rid": rid, "start": sub, "dur": ae_phase_end - sub, "hover": hover_txt})
+#UPDATE xmax.
+                    xmax = max(xmax, ae_phase_end)
 
+#REVIEWER decision marker at submission.
                 lvl = _pt_level(r.get("ReviewerPaperRating", ""))
 
+#DRAW marker if level known.
                 if lvl is not None:
+#SIZE scaling.
                     size = 10 + (lvl * 4)
+#APPEND x.
                     dec_x.append(sub)
+#APPEND y.
                     dec_y.append(rid)
+#APPEND size.
                     dec_size.append(size)
+#APPEND label.
                     dec_text.append(_pt_abbr(r.get("ReviewerPaperRating", "")))
+#APPEND hover.
                     dec_hover.append(
                         f"Reviewer={rid}<br>"
                         f"Submitted day={sub:.1f}<br>"
@@ -1592,12 +1779,16 @@ with tab_paper_timeline:
                         f"Sentiment={r.get('ReviewSentiment_1to5', '')}<br>"
                         f"Words={r.get('ReviewLengthWords', '')}"
                     )
+#UPDATE xmax.
                     xmax = max(xmax, sub)
 
+#DONE accept path.
             continue
 
+#KEEP xmax sensible.
     xmax = max(xmax, end_anchor, 0.0)
 
+#GUARD if no phase bars.
     if sum(len(v) for v in stage_data.values()) == 0:
 #WARN.
         st.warning("No phase bars were generated. Check reviewer dates for this paper-round.")
@@ -1616,29 +1807,41 @@ with tab_paper_timeline:
                         "DateNoResponseTerminal",
                         "NoResponseTerminalOutcome",
                         "DateReviewSubmitted",
+                        "AE_RecommendationAtEnd",
+                        "AE_RecommendationDateAtEnd",
+                        "EIC_DecisionAtEnd",
+                        "EIC_DecisionDateAtEnd",
                     ]
                     if c in rr.columns
                 ]
             ].head(80),
             use_container_width=True,
         )
+#STOP.
         st.stop()
 
+#CREATE figure.
     fig = go.Figure()
 
-    for stage in ["Invite phase", "Review phase", "AC to EIC phase", "Declined"]:
+#ADD phase bars in order.
+    for stage in ["Invite phase", "Review phase", "AE to EIC phase", "Declined"]:
+#GET rows.
         rows = stage_data.get(stage, [])
-
+#SKIP empty.
         if not rows:
+#CONTINUE.
             continue
-
+#Y categories.
         y = [t["rid"] for t in rows]
+#START positions.
         base = [t["start"] for t in rows]
+#BAR lengths.
         x = [t["dur"] for t in rows]
+#HOVER strings.
         hover = [t["hover"] for t in rows]
-
+#TRACE label.
         trace_name = stage if stage != "Declined" else "Invite phase (declined)"
-
+#ADD bar trace.
         fig.add_trace(
             go.Bar(
                 x=x,
@@ -1653,7 +1856,9 @@ with tab_paper_timeline:
             )
         )
 
+#ADD reminder markers.
     if len(rem_x) > 0:
+#ADD trace.
         fig.add_trace(
             go.Scatter(
                 x=rem_x,
@@ -1665,7 +1870,9 @@ with tab_paper_timeline:
             )
         )
 
+#ADD reviewer decision markers.
     if len(dec_x) > 0:
+#ADD trace.
         fig.add_trace(
             go.Scatter(
                 x=dec_x,
@@ -1680,14 +1887,19 @@ with tab_paper_timeline:
             )
         )
 
+#SUBMISSION line.
     fig.add_vline(x=0.0, line_width=1, line_dash="solid")
-
+#ANNOTATE submission.
     fig.add_annotation(x=0.0, y=1.02, xref="x", yref="paper", text="Submitted", showarrow=False, font=dict(size=10))
 
+#KEEP only EIC decision as paper-level terminal line.
     if not np.isnan(eic_line):
+#ADD line.
         fig.add_vline(x=float(eic_line), line_width=1, line_dash="solid")
+#ANNOTATE.
         fig.add_annotation(x=float(eic_line), y=1.02, xref="x", yref="paper", text="EIC decision", showarrow=False, font=dict(size=10))
 
+#LAYOUT.
     fig.update_layout(
         barmode="overlay",
         bargap=0.70,
@@ -1697,14 +1909,16 @@ with tab_paper_timeline:
         legend_title_text="Phase",
     )
 
+#TICK interval.
     tick_step = 21.0
-
+#X range max.
     x_max_plot = max(5.0, float(xmax) + 5.0)
-
+#BUILD tick values.
     tickvals = list(np.arange(0.0, x_max_plot + 0.0001, tick_step))
-
+#BUILD tick labels as calendar dates.
     ticktext = [(base_date + pd.Timedelta(days=float(v))).strftime("%d %b %Y") for v in tickvals]
 
+#APPLY x-axis settings.
     fig.update_xaxes(
         type="linear",
         title="Date",
@@ -1715,20 +1929,26 @@ with tab_paper_timeline:
         tickangle=45,
     )
 
+#APPLY y-axis ordering.
     fig.update_yaxes(title="Reviewer", categoryorder="array", categoryarray=reviewers[::-1])
 
+#SHOW chart.
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### Reviewer details (durations + decision)")
+#DETAIL table heading.
+    st.markdown("#### Reviewer details (durations + decision + AE/EIC end state)")
 
+#COPY reviewer table.
     rr2 = rr.copy()
 
+#DURATION invite to accept.
     rr2["InviteToAccept_days"] = (rr2["DateInvitationAccepted"] - rr2["DateReviewerInvited"]).dt.days
-
+#DURATION accept to submit.
     rr2["AcceptToSubmit_days"] = (rr2["DateReviewSubmitted"] - rr2["DateInvitationAccepted"]).dt.days
-
+#DURATION overdue.
     rr2["Overdue_days"] = (rr2["DateReviewSubmitted"] - rr2["DateReviewDue"]).dt.days
 
+#TABLE columns.
     cols = [
         "ReviewerID",
         "InviteOutcome",
@@ -1750,8 +1970,15 @@ with tab_paper_timeline:
         "ReviewSentiment_1to5",
         "ReviewerPaperRating",
         "ReviewLengthWords",
+        "AE_RecommendationAtEnd",
+        "AE_RecommendationDateAtEnd",
+        "EIC_DecisionAtEnd",
+        "EIC_DecisionDateAtEnd",
+        "FinalDecisionOutcomeAtEnd",
     ]
 
+#KEEP only present cols.
     cols = [c for c in cols if c in rr2.columns]
 
+#SHOW table.
     st.dataframe(rr2[cols], use_container_width=True, height=420)
