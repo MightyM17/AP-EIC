@@ -539,12 +539,12 @@ if selected_tab == "Overview":
         st.caption("PaperHeader missingness (%)")
         fig = px.bar(miss_p.head(20), x="missing_pct", y="column", orientation="h", hover_data=["missing_count", "dtype"])
         fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with colB:
         st.caption("ReviewerRows missingness (%)")
         fig = px.bar(miss_r.head(20), x="missing_pct", y="column", orientation="h", hover_data=["missing_count", "dtype"])
         fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     st.subheader("Quick timeline bottleneck overview (paper-level)")
     dur_cols = [
@@ -565,7 +565,7 @@ if selected_tab == "Overview":
             "p95": [paper_f[c].quantile(0.95) for c in dur_cols],
             "max": [paper_f[c].max(skipna=True) for c in dur_cols],
         }).round(2)
-        st.dataframe(stats_df, use_container_width=True)
+        st.dataframe(stats_df, width='stretch')
 
 
 # -----------------------------
@@ -584,7 +584,7 @@ if selected_tab == "Your focus columns":
                 title="SubmissionRound distribution (PaperHeader)",
             )
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.warning("SubmissionRound column not found in PaperHeader.")
     with right:
@@ -597,7 +597,7 @@ if selected_tab == "Your focus columns":
                 title="Max submission round per PaperID",
             )
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     st.subheader("2) ReviewerWorkloadAtInvite")
     left, right = st.columns([1, 1])
@@ -611,7 +611,7 @@ if selected_tab == "Your focus columns":
                 title=f"{workload_col} histogram",
             )
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         with right:
             fig = px.box(
                 rev_f,
@@ -620,7 +620,7 @@ if selected_tab == "Your focus columns":
                 title=f"{workload_col} box (outliers visible)",
             )
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
     else:
         st.warning("Reviewer workload column not found.")
 
@@ -648,10 +648,10 @@ if selected_tab == "Your focus columns":
                 margin=dict(l=10, r=10, t=50, b=10)
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             fig.update_layout(height=420, xaxis_title="InviteOutcome", yaxis_title="Count", margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         with right:
             # acceptance rate vs workload (binned)
             if workload_col:
@@ -661,7 +661,7 @@ if selected_tab == "Your focus columns":
                     acc = tmp.groupby("workload_bin")[outcome_col].apply(lambda s: (s.astype(str) == "accept").mean()).reset_index(name="accept_rate")
                     fig = px.bar(acc, x="workload_bin", y="accept_rate", title="Acceptance rate by workload bin")
                     fig.update_layout(height=420, yaxis=dict(range=[0, 1]), margin=dict(l=10, r=10, t=50, b=10))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
     else:
         st.warning("InviteOutcome column not found.")
 
@@ -703,14 +703,14 @@ if selected_tab == "Explore distributions":
             if log_x:
                 fig.update_xaxes(type="log")
             fig.update_layout(height=460, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # ECDF
             fig2 = px.ecdf(df, x=col_sel, title=f"ECDF: {col_sel}")
             if log_x:
                 fig2.update_xaxes(type="log")
             fig2.update_layout(height=460, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width='stretch')
 
         elif col_type == "categorical":
             top_k = st.slider("Top-K categories", 5, 60, 20, 1)
@@ -718,7 +718,7 @@ if selected_tab == "Explore distributions":
             vc.columns = ["category", "count"]
             fig = px.bar(vc, x="category", y="count", title=f"Top {top_k}: {col_sel}")
             fig.update_layout(height=460, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         else:
             # datetime: counts by week/month
@@ -728,7 +728,7 @@ if selected_tab == "Explore distributions":
             agg = tmp.groupby("bucket").size().reset_index(name="count")
             fig = px.line(agg, x="bucket", y="count", title=f"Event volume over time: {col_sel} ({gran})")
             fig.update_layout(height=460, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         # Descriptive stats
         st.subheader("Quick stats")
@@ -776,17 +776,17 @@ if selected_tab == "Heavy-tail fits":
 
     if fit_col:
         fig = plot_numeric_distribution(df_fit[fit_col], title=fit_col, log_x=log_x, dist_overlay=dist_name)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         qq = plot_qq(df_fit[fit_col], dist_name=dist_name, title=f"Q-Q plot: {fit_col} vs {dist_name}")
         if qq is not None:
-            st.plotly_chart(qq, use_container_width=True)
+            st.plotly_chart(qq, width='stretch')
 
         st.subheader("Outliers (top 20)")
         s = df_fit[fit_col].dropna()
         if len(s) > 0:
             top = df_fit.loc[s.sort_values(ascending=False).head(20).index]
-            st.dataframe(top, use_container_width=True)
+            st.dataframe(top, width='stretch')
 
 
 # -----------------------------
@@ -798,10 +798,10 @@ if selected_tab == "Sanity checks":
     if len(vio) == 0:
         st.info("Not enough timeline columns found to run monotonicity checks.")
     else:
-        st.dataframe(vio, use_container_width=True)
+        st.dataframe(vio, width='stretch')
         fig = px.bar(vio, x="violations", y="rule", orientation="h", title="Violation counts by rule")
         fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     st.subheader("Reviewer consistency checks (ReviewerRows)")
     checks = []
@@ -819,7 +819,7 @@ if selected_tab == "Sanity checks":
     if len(chk_df) == 0:
         st.info("Not enough columns to run reviewer checks.")
     else:
-        st.dataframe(chk_df, use_container_width=True)
+        st.dataframe(chk_df, width='stretch')
 
 
 # -----------------------------
@@ -831,10 +831,10 @@ if selected_tab == "Data tables":
     left, right = st.columns(2)
     with left:
         st.caption("PaperHeader (filtered)")
-        st.dataframe(paper_f.head(200), use_container_width=True, height=420)
+        st.dataframe(paper_f.head(200), width='stretch', height=420)
     with right:
         st.caption("ReviewerRows (filtered)")
-        st.dataframe(rev_f.head(200), use_container_width=True, height=420)
+        st.dataframe(rev_f.head(200), width='stretch', height=420)
 
     st.subheader("Download filtered data")
     c1, c2 = st.columns(2)
@@ -1035,7 +1035,7 @@ if selected_tab == "EIC":
     fig.add_vrect(x0=low, x1=high, opacity=0.15, line_width=0)
     fig.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
     fig.update_xaxes(range=[0, cap], title="Days")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Filtered subset of papers in selected range
     paper["_metric"] = pd.to_numeric(paper[metric], errors="coerce")
@@ -1059,7 +1059,7 @@ if selected_tab == "EIC":
             .sort_values(["p90", "median", "count"], ascending=False)
         )
         st.markdown("#### EIC backlog summary (within selected range)")
-        st.dataframe(eic_summary, use_container_width=True, height=220)
+        st.dataframe(eic_summary, width='stretch', height=220)
 
     st.markdown("#### Drilldown: pick a paper-round and see reviewer statuses")
 
@@ -1094,7 +1094,7 @@ if selected_tab == "EIC":
     show_cols = [c for c in show_cols if c in paper.columns]
 
     one = paper[(paper["PaperID"] == picked_pid) & (paper["SubmissionRound"] == picked_round)].copy()
-    st.dataframe(one[show_cols], use_container_width=True)
+    st.dataframe(one[show_cols], width='stretch')
 
     # Reviewer rows for that paper-round
     rr = rev[(rev["PaperID"] == picked_pid) & (rev["SubmissionRound"] == picked_round)].copy()
@@ -1108,7 +1108,7 @@ if selected_tab == "EIC":
 
     fig2 = px.bar(status_counts, x="ReviewerStatus", y="count", title="Reviewer status breakdown")
     fig2.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width='stretch')
 
     # Show reviewers table (EIC-friendly: who is blocking)
     rr_cols = [
@@ -1118,7 +1118,7 @@ if selected_tab == "EIC":
     ]
     rr_cols = [c for c in rr_cols if c in rr.columns]
     st.dataframe(rr[rr_cols].sort_values(["ReviewerStatus","InviteOutcome"], ascending=[True, True]),
-                 use_container_width=True, height=420)
+                 width='stretch', height=420)
 
 def _to_dt(df, cols):
     df = df.copy()
@@ -1514,7 +1514,7 @@ if selected_tab == "Paper timeline":
     show_cols = [c for c in show_cols if c in one.columns]
 
 #DISPLAY paper summary.
-    st.dataframe(one[show_cols], use_container_width=True)
+    st.dataframe(one[show_cols], width='stretch')
 
 #GET reviewer rows.
     rr = rev[(rev["PaperID"] == pid) & (rev["SubmissionRound"].astype(int) == rnd)].copy()
@@ -1852,7 +1852,7 @@ if selected_tab == "Paper timeline":
                     if c in rr.columns
                 ]
             ].head(80),
-            use_container_width=True,
+            width='stretch',
         )
 #STOP.
         st.stop()
@@ -1970,7 +1970,7 @@ if selected_tab == "Paper timeline":
     fig.update_yaxes(title="Reviewer", categoryorder="array", categoryarray=reviewers[::-1])
 
 #SHOW chart.
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 #DETAIL table heading.
     st.markdown("#### Reviewer details (durations + decision + AE/EIC end state)")
@@ -2018,7 +2018,7 @@ if selected_tab == "Paper timeline":
     cols = [c for c in cols if c in rr2.columns]
 
 #SHOW table.
-    st.dataframe(rr2[cols], use_container_width=True, height=420)
+    st.dataframe(rr2[cols], width='stretch', height=420)
 
 #REVIEWER TIMELINE TAB ONLY.
 if selected_tab == "Reviewer timeline":
@@ -2566,7 +2566,7 @@ if selected_tab == "Reviewer timeline":
 #WARN.
         st.warning("No timeline segments were generated for this reviewer.")
 #SHOW diagnostic.
-        st.dataframe(rr, use_container_width=True)
+        st.dataframe(rr, width='stretch')
 #STOP.
         st.stop()
 
@@ -2685,7 +2685,7 @@ if selected_tab == "Reviewer timeline":
 )
 
 #SHOW chart.
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 #DETAILS heading.
     st.markdown("#### Reviewer assignment details")
@@ -2740,7 +2740,7 @@ if selected_tab == "Reviewer timeline":
     cols = [c for c in cols if c in rr2.columns]
 
 #SHOW details table.
-    st.dataframe(rr2[cols], use_container_width=True, height=420)
+    st.dataframe(rr2[cols], width='stretch', height=420)
 
 
 #AE TIMELINE TAB ONLY.
@@ -3185,7 +3185,7 @@ if selected_tab == "AE timeline":
 #WARN.
         st.warning("No AE timeline segments were generated for this filter selection.")
 #SHOW diagnostic.
-        st.dataframe(ae_df, use_container_width=True)
+        st.dataframe(ae_df, width='stretch')
 #STOP.
         st.stop()
 
@@ -3323,7 +3323,7 @@ if selected_tab == "AE timeline":
 #SHOW chart.
     event = st.plotly_chart(
         fig,
-        use_container_width=True,
+        width='stretch',
         key="ae_plot",
         on_select="rerun"
     )
@@ -3382,4 +3382,4 @@ if selected_tab == "AE timeline":
     cols = [c for c in cols if c in ae_df.columns]
 
 #SHOW table.
-    st.dataframe(ae_df[cols], use_container_width=True, height=420)
+    st.dataframe(ae_df[cols], width='stretch', height=420)
