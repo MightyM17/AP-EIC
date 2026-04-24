@@ -488,8 +488,8 @@ rev_f = multiselect_filter(rev_f, outcome_col, "Invite outcome")
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic, tab_paper_timeline, tab_reviewer_timeline, tab_ae_timeline = st.tabs(
-    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables", "EIC", "Paper timeline", "Reviewer timeline", "AE timeline"]
+tab_overview, tab_focus, tab_distributions, tab_fits, tab_sanity, tab_tables, tab_eic, tab_paper_timeline, tab_reviewer_timeline, tab_ae_timeline, tab_ae_overview = st.tabs(
+    ["Overview", "Your focus columns", "Explore distributions", "Heavy-tail fits", "Sanity checks", "Data tables", "EIC", "Paper timeline", "Reviewer timeline", "AE timeline", "AE Overview"]
 )
 
 
@@ -6290,7 +6290,7 @@ with tab_ae_timeline:
     )
 
 #SHOW chart.
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="Dfg")
 
 #DETAIL table heading.
     st.markdown("#### AE paper-round details")
@@ -6949,3 +6949,126 @@ with tab_ae_timeline:
 
 #SHOW table.
     st.dataframe(ae_df[cols], use_container_width=True, height=420)
+
+with tab_ae_overview:
+
+    import pandas as pd
+    import numpy as np
+    import plotly.graph_objects as go
+
+    st.subheader("AE Overview — All AEs & Papers")
+
+    @st.cache_data
+    def load_data():
+        df = paper_df.copy()
+        for c in [
+            "DatePaperSubmitted",
+            "DateReviewersFullyAssigned",
+            "ReviewPhaseClosedDateAtEnd",
+            "AE_RecommendationDate",
+            "EIC_DecisionDate"
+        ]:
+            if c in df.columns:
+                df[c] = pd.to_datetime(df[c], errors="coerce")
+        return df
+
+    paper = load_data()
+
+    paper = paper.sort_values(["HandlingAssociateEditorID","DatePaperSubmitted"])
+
+    base_date = paper["DatePaperSubmitted"].min()
+
+    def d(dt):
+        if pd.isna(dt) or pd.isna(base_date):
+            return np.nan
+        return (dt - base_date).days
+
+    colors = {
+        "Invite": "#E45756",
+        "Review": "#F2CF5B",
+        "AE": "#54A24B"
+    }
+
+    for ae, group in paper.groupby("HandlingAssociateEditorID"):
+
+        with st.expander(f"{ae} — {len(group)} papers", expanded=False):
+
+            fig = go.Figure()
+
+            for i, (_, r) in enumerate(group.iterrows()):
+
+                label = f"{r['PaperID']} (r{int(r['SubmissionRound'])})"
+
+                s = d(r["DatePaperSubmitted"])
+                assign = d(r.get("DateReviewersFullyAssigned"))
+                review_end = d(r.get("ReviewPhaseClosedDateAtEnd"))
+                ae_dt = d(r.get("AE_RecommendationDate"))
+
+                #INVITE
+                if not np.isnan(s) and not np.isnan(assign):
+                    fig.add_trace(go.Bar(
+                        x=[assign - s],
+                        y=[label],
+                        base=[s],
+                        orientation="h",
+                        marker=dict(color=colors["Invite"]),
+                        width=0.18,
+                        name="Invite Phase",
+                        legendgroup="invite",
+                        showlegend=(i == 0)
+                    ))
+
+                #REVIEW
+                if not np.isnan(assign) and not np.isnan(review_end):
+                    fig.add_trace(go.Bar(
+                        x=[review_end - assign],
+                        y=[label],
+                        base=[assign],
+                        orientation="h",
+                        marker=dict(color=colors["Review"]),
+                        width=0.18,
+                        name="Review Phase",
+                        legendgroup="review",
+                        showlegend=(i == 0)
+                    ))
+
+                #AE
+                if not np.isnan(review_end) and not np.isnan(ae_dt):
+                    fig.add_trace(go.Bar(
+                        x=[ae_dt - review_end],
+                        y=[label],
+                        base=[review_end],
+                        orientation="h",
+                        marker=dict(color=colors["AE"]),
+                        width=0.18,
+                        name="AE → EIC Phase",
+                        legendgroup="ae",
+                        showlegend=(i == 0)
+                    ))
+
+            fig.update_layout(
+                height=max(200, len(group)*25),
+                margin=dict(l=0, r=0, t=10, b=10),
+                barmode="overlay"
+            )
+
+            fig.update_yaxes(autorange="reversed")
+            fig.update_xaxes(showticklabels=False)
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            #NAVIGATION
+            selected = st.selectbox(
+                f"Open paper ({ae})",
+                group["PaperID"].astype(str) + " | round " + group["SubmissionRound"].astype(int).astype(str),
+                key=f"nav_{ae}"
+            )
+
+            if st.button(f"Go → {ae}", key=f"btn_{ae}"):
+
+                st.session_state["paper_nav"] = selected
+
+                #SWITCH TAB
+                st.session_state["active_tab"] = 1
+
+                st.rerun()
