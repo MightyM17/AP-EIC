@@ -503,7 +503,8 @@ nav_options = [
     "EIC",
     "Paper timeline",
     "Reviewer timeline",
-    "AE timeline"
+    "AE timeline",
+    "Paper status overview"
 ]
 
 # ✅ ONLY override when coming from AE click
@@ -2685,7 +2686,36 @@ if selected_tab == "Reviewer timeline":
 )
 
 #SHOW chart.
-    st.plotly_chart(fig, width='stretch')
+    # st.plotly_chart(fig, width='stretch')
+
+    #SHOW chart with click-to-paper navigation.
+    reviewer_event = st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="reviewer_plot",
+        on_select="rerun"
+    )
+
+#CLICK → STORE TARGET PAPER AND MOVE TO PAPER TIMELINE.
+    if reviewer_event and "selection" in reviewer_event:
+#GET selected points.
+        pts = reviewer_event["selection"].get("points", [])
+#HANDLE only if something was selected.
+        if pts:
+#GET y-axis value. In Reviewer timeline this is PaperRoundLabel.
+            selected_label = pts[0].get("y")
+#AVOID repeated rerun on same selected paper.
+            if selected_label and st.session_state.get("last_reviewer_clicked_paper") != selected_label:
+#STORE selected paper for Paper timeline selectbox.
+                st.session_state["selected_paper_from_ae"] = selected_label
+#STORE last clicked reviewer paper.
+                st.session_state["last_reviewer_clicked_paper"] = selected_label
+#MOVE navigation to Paper timeline.
+                st.session_state["active_tab"] = "Paper timeline"
+#REUSE your existing nav sync flag.
+                st.session_state["from_ae_click"] = True
+#RERUN.
+                st.rerun()
 
 #DETAILS heading.
     st.markdown("#### Reviewer assignment details")
@@ -3383,3 +3413,704 @@ if selected_tab == "AE timeline":
 
 #SHOW table.
     st.dataframe(ae_df[cols], width='stretch', height=420)
+
+#PAPER STATUS OVERVIEW TAB ONLY.
+if selected_tab == "Paper status overview":
+#LOCAL import.
+    import numpy as np
+#LOCAL import.
+    import pandas as pd
+#LOCAL import.
+    import plotly.express as px
+#LOCAL import.
+    import streamlit as st
+
+#TITLE.
+    st.subheader("Paper status overview: where papers stand in the process")
+
+#USE filtered paper dataframe if available.
+    try:
+#SOURCE.
+        _paper_src = paper_f
+#FALLBACK.
+    except NameError:
+#SOURCE fallback.
+        _paper_src = paper_df
+
+#COPY paper data.
+    paper_status = _paper_src.copy()
+
+#DATE columns used for stage inference.
+    date_cols = [
+        "DatePaperSubmitted",
+        "DateReviewersFullyAssigned",
+        "DateFirstReviewReceived",
+        "DateAllReviewsReceived",
+        "AE_RecommendationDate",
+        "EIC_DecisionDate",
+        "DateDecisionLetterSent",
+    ]
+
+#PARSE date columns.
+    for c in date_cols:
+#CHECK column.
+        if c in paper_status.columns:
+#CONVERT to datetime.
+            paper_status[c] = pd.to_datetime(paper_status[c], errors="coerce")
+
+#GUARD required columns.
+    if "PaperID" not in paper_status.columns or "SubmissionRound" not in paper_status.columns:
+#SHOW error.
+        st.error("PaperHeader must contain PaperID and SubmissionRound.")
+#STOP app.
+        st.stop()
+
+#GUARD submission date.
+    if "DatePaperSubmitted" not in paper_status.columns:
+#SHOW error.
+        st.error("PaperHeader must contain DatePaperSubmitted.")
+#STOP app.
+        st.stop()
+
+#BUILD paper-round key.
+    paper_status["PaperRoundKey"] = paper_status["PaperID"].astype(str) + " | round " + paper_status["SubmissionRound"].astype(int).astype(str)
+
+#BUILD all event dates for snapshot range.
+    all_event_dates = []
+#COLLECT event dates.
+    for c in date_cols:
+#CHECK column.
+        if c in paper_status.columns:
+#APPEND non-null dates.
+            all_event_dates.append(paper_status[c].dropna())
+
+#COMBINE event dates.
+    all_event_dates = pd.concat(all_event_dates) if len(all_event_dates) > 0 else pd.Series(dtype="datetime64[ns]")
+
+#GUARD valid dates.
+    if all_event_dates.empty:
+#SHOW error.
+        st.error("No valid timeline dates found.")
+#STOP app.
+        st.stop()
+
+#COMPUTE min date.
+    min_snapshot = all_event_dates.min()
+#COMPUTE max date.
+    max_snapshot = all_event_dates.max()
+
+#DEFAULT snapshot around middle-late dataset so some papers are still active.
+    default_snapshot = paper_status["DatePaperSubmitted"].dropna().quantile(0.70) + pd.Timedelta(days=90)
+
+#CLAMP default snapshot.
+    if pd.isna(default_snapshot):
+#FALLBACK default.
+        default_snapshot = min_snapshot + (max_snapshot - min_snapshot) / 2
+
+#CLAMP lower.
+    if default_snapshot < min_snapshot:
+#SET lower.
+        default_snapshot = min_snapshot
+
+#CLAMP upper.
+    if default_snapshot > max_snapshot:
+#SET upper.
+        default_snapshot = max_snapshot
+
+#CONTROL row.
+    c0, c1, c2 = st.columns([1.2, 1.0, 1.0])
+
+#SNAPSHOT date.
+    with c0:
+#DATE input.
+        snapshot_date = st.date_input(
+            "Snapshot / as-of date",
+            value=default_snapshot.date(),
+            min_value=min_snapshot.date(),
+            max_value=max_snapshot.date(),
+            key="paper_status_snapshot_date",
+        )
+
+#INCLUDE future submitted papers toggle.
+    with c1:
+#CHECKBOX.
+        include_not_submitted = st.checkbox(
+            "Include not-yet-submitted papers",
+            value=False,
+            key="paper_status_include_future",
+        )
+
+#AGE bucket size.
+    with c2:
+#SLIDER.
+        age_bucket_months = st.slider(
+            "Age bucket size, months",
+            min_value=1,
+            max_value=12,
+            value=3,
+            step=1,
+            key="paper_status_age_bucket_size",
+        )
+
+#CONVERT snapshot.
+    snapshot_dt = pd.to_datetime(snapshot_date)
+
+#HELPER: event happened by snapshot.
+    def _happened(row, col):
+#MISSING column.
+        if col not in row.index:
+#RETURN false.
+            return False
+#MISSING date.
+        if pd.isna(row.get(col, pd.NaT)):
+#RETURN false.
+            return False
+#COMPARE.
+        return row.get(col) <= snapshot_dt
+
+#HELPER: decision label.
+    def _decision_label(x):
+#NORMALIZE.
+        x = str(x).strip().lower()
+#MAP.
+        m = {
+            "accept": "Accepted",
+            "reject": "Rejected",
+            "minor revision": "Minor revision",
+            "major revision": "Major revision",
+            "submit as new": "Submit as new",
+            "resubmit as new": "Submit as new",
+            "": "No decision yet",
+            "nan": "No decision yet",
+            "none": "No decision yet",
+        }
+#RETURN.
+        return m.get(x, str(x).strip().title() if str(x).strip() else "No decision yet")
+
+#HELPER: stage as of snapshot.
+    def _stage_as_of(r):
+#NOT submitted yet.
+        if pd.isna(r.get("DatePaperSubmitted", pd.NaT)) or r.get("DatePaperSubmitted") > snapshot_dt:
+#RETURN.
+            return "Not yet submitted"
+#RESOLVED.
+        if _happened(r, "DateDecisionLetterSent"):
+#RETURN.
+            return "Resolved: decision sent"
+#EIC decision made but letter not sent.
+        if _happened(r, "EIC_DecisionDate"):
+#RETURN.
+            return "Waiting: decision letter"
+#AE recommendation made but EIC not done.
+        if _happened(r, "AE_RecommendationDate"):
+#RETURN.
+            return "Waiting: EIC decision"
+#All reviews in but AE not done.
+        if _happened(r, "DateAllReviewsReceived"):
+#RETURN.
+            return "Waiting: AE recommendation"
+#Some reviews received.
+        if _happened(r, "DateFirstReviewReceived"):
+#RETURN.
+            return "In review: partial reviews received"
+#Reviewers assigned.
+        if _happened(r, "DateReviewersFullyAssigned"):
+#RETURN.
+            return "In review: waiting for first review"
+#Submitted but reviewers not fully assigned.
+        return "Waiting: reviewer assignment"
+
+#CREATE stage as of snapshot.
+    paper_status["StageAsOf"] = paper_status.apply(_stage_as_of, axis=1)
+
+#CREATE resolution state as of snapshot.
+    paper_status["ResolutionStateAsOf"] = np.where(
+        paper_status["StageAsOf"].eq("Resolved: decision sent"),
+        "Resolved",
+        "No decision yet",
+    )
+
+#SET not-yet-submitted as separate state.
+    paper_status.loc[paper_status["StageAsOf"].eq("Not yet submitted"), "ResolutionStateAsOf"] = "Not yet submitted"
+
+#CREATE decision bucket as of snapshot.
+    if "FinalDecisionOutcome" in paper_status.columns:
+#USE final decision if resolved.
+        paper_status["DecisionBucketAsOf"] = paper_status["FinalDecisionOutcome"].apply(_decision_label)
+#ELIF EIC decision exists.
+    elif "EIC_Decision" in paper_status.columns:
+#USE EIC decision.
+        paper_status["DecisionBucketAsOf"] = paper_status["EIC_Decision"].apply(_decision_label)
+#ELSE no decision.
+    else:
+#DEFAULT.
+        paper_status["DecisionBucketAsOf"] = "No decision yet"
+
+#FOR unresolved, force no decision.
+    paper_status.loc[~paper_status["StageAsOf"].eq("Resolved: decision sent"), "DecisionBucketAsOf"] = "No decision yet"
+
+#DROP not-yet-submitted if unchecked.
+    if not include_not_submitted:
+#FILTER.
+        paper_status = paper_status[~paper_status["StageAsOf"].eq("Not yet submitted")].copy()
+
+#COMPUTE age endpoint.
+    paper_status["AgeEndDateAsOf"] = np.where(
+        paper_status["StageAsOf"].eq("Resolved: decision sent"),
+        paper_status["DateDecisionLetterSent"],
+        snapshot_dt,
+    )
+
+#CONVERT endpoint to datetime.
+    paper_status["AgeEndDateAsOf"] = pd.to_datetime(paper_status["AgeEndDateAsOf"], errors="coerce")
+
+#COMPUTE age days.
+    paper_status["AgeDaysAsOf"] = (paper_status["AgeEndDateAsOf"] - paper_status["DatePaperSubmitted"]).dt.days
+
+#CLIP negative age.
+    paper_status["AgeDaysAsOf"] = paper_status["AgeDaysAsOf"].clip(lower=0)
+
+#COMPUTE age months.
+    paper_status["AgeMonthsAsOf"] = paper_status["AgeDaysAsOf"] / 30.44
+
+#CREATE age buckets dynamically.
+    max_age_months = paper_status["AgeMonthsAsOf"].dropna().max()
+
+#FALLBACK max.
+    if pd.isna(max_age_months):
+#SET fallback.
+        max_age_months = age_bucket_months
+
+#CREATE bin upper limit.
+    max_bin = int(np.ceil(max_age_months / age_bucket_months) * age_bucket_months + age_bucket_months)
+
+#CREATE bin edges.
+    bins = list(range(0, max_bin + age_bucket_months, age_bucket_months))
+
+#ENSURE at least two bins.
+    if len(bins) < 2:
+#SET fallback bins.
+        bins = [0, age_bucket_months]
+
+#CREATE labels.
+    labels = [f"{bins[i]}-{bins[i+1]} months" for i in range(len(bins) - 1)]
+
+#CUT age into buckets.
+    paper_status["AgeBucketAsOf"] = pd.cut(
+        paper_status["AgeMonthsAsOf"],
+        bins=bins,
+        labels=labels,
+        include_lowest=True,
+        right=False,
+    ).astype(str)
+
+#FIX missing age bucket.
+    paper_status["AgeBucketAsOf"] = paper_status["AgeBucketAsOf"].replace("nan", "Unknown age")
+
+#CREATE submission month.
+    paper_status["SubmissionMonth"] = paper_status["DatePaperSubmitted"].dt.to_period("M").dt.to_timestamp()
+
+#STAGE order.
+    stage_order = [
+        "Waiting: reviewer assignment",
+        "In review: waiting for first review",
+        "In review: partial reviews received",
+        "Waiting: AE recommendation",
+        "Waiting: EIC decision",
+        "Waiting: decision letter",
+        "Resolved: decision sent",
+        "Not yet submitted",
+    ]
+
+#FILTER stage order to existing.
+    stage_order_existing = [s for s in stage_order if s in paper_status["StageAsOf"].unique().tolist()]
+
+#METRICS.
+    m1, m2, m3, m4, m5 = st.columns(5)
+
+#TOTAL.
+    m1.metric("Papers in snapshot", f"{len(paper_status):,}")
+
+#NO decision.
+    m2.metric("No decision yet", f"{int((paper_status['ResolutionStateAsOf'] == 'No decision yet').sum()):,}")
+
+#RESOLVED.
+    m3.metric("Resolved", f"{int((paper_status['ResolutionStateAsOf'] == 'Resolved').sum()):,}")
+
+#WAITING review-related.
+    active_review = paper_status["StageAsOf"].isin([
+        "In review: waiting for first review",
+        "In review: partial reviews received",
+    ]).sum()
+
+#METRIC.
+    m4.metric("Currently in review", f"{int(active_review):,}")
+
+#MEDIAN age.
+    m5.metric("Median age months", f"{paper_status['AgeMonthsAsOf'].median():.1f}")
+
+#SECTION.
+    st.markdown("#### Main view: how many papers are in each stage?")
+
+#COUNT by stage.
+    stage_counts = (
+        paper_status
+        .groupby("StageAsOf")
+        .size()
+        .reset_index(name="PaperCount")
+    )
+
+#APPLY order.
+    stage_counts["StageAsOf"] = pd.Categorical(stage_counts["StageAsOf"], categories=stage_order, ordered=True)
+
+#SORT.
+    stage_counts = stage_counts.sort_values("StageAsOf")
+
+#BUILD stage chart.
+    fig_stage = px.bar(
+        stage_counts,
+        x="StageAsOf",
+        y="PaperCount",
+        text="PaperCount",
+        title=f"Paper count by workflow stage as of {snapshot_dt.date().isoformat()}",
+        custom_data=["StageAsOf"],
+    )
+
+#FORMAT stage chart.
+    fig_stage.update_layout(
+        height=500,
+        xaxis_title="Workflow stage",
+        yaxis_title="Number of papers",
+        margin=dict(l=10, r=10, t=60, b=150),
+    )
+
+#ROTATE x labels.
+    fig_stage.update_xaxes(tickangle=35)
+
+#SHOW chart with selection.
+    stage_event = st.plotly_chart(
+        fig_stage,
+        use_container_width=True,
+        key="paper_status_stage_chart",
+        on_select="rerun",
+    )
+
+#SELECTED stage.
+    selected_stage = None
+
+#READ selected stage.
+    if stage_event and "selection" in stage_event:
+#POINTS.
+        pts = stage_event["selection"].get("points", [])
+#IF selected.
+        if pts:
+#GET stage.
+            selected_stage = pts[0].get("x")
+
+#SECOND ROW CHARTS.
+    left, right = st.columns(2)
+
+#UNRESOLVED stage and age chart.
+    with left:
+#UNRESOLVED only.
+        unresolved_df = paper_status[paper_status["ResolutionStateAsOf"] == "No decision yet"].copy()
+
+#GROUP unresolved.
+        unresolved_counts = (
+            unresolved_df
+            .groupby(["StageAsOf", "AgeBucketAsOf"])
+            .size()
+            .reset_index(name="PaperCount")
+        )
+
+#BUILD chart.
+        fig_unresolved = px.bar(
+            unresolved_counts,
+            x="StageAsOf",
+            y="PaperCount",
+            color="AgeBucketAsOf",
+            text="PaperCount",
+            title="No-decision papers by stage and age",
+            custom_data=["StageAsOf", "AgeBucketAsOf"],
+            category_orders={"StageAsOf": stage_order, "AgeBucketAsOf": labels},
+        )
+
+#FORMAT.
+        fig_unresolved.update_layout(
+            height=480,
+            xaxis_title="Current stage",
+            yaxis_title="No-decision papers",
+            legend_title_text="Age as of snapshot",
+            margin=dict(l=10, r=10, t=60, b=150),
+        )
+
+#ROTATE.
+        fig_unresolved.update_xaxes(tickangle=35)
+
+#SHOW.
+        unresolved_event = st.plotly_chart(
+            fig_unresolved,
+            use_container_width=True,
+            key="paper_status_unresolved_chart",
+            on_select="rerun",
+        )
+
+#RESOLVED decision chart.
+    with right:
+#RESOLVED only.
+        resolved_df = paper_status[paper_status["ResolutionStateAsOf"] == "Resolved"].copy()
+
+#GROUP resolved.
+        resolved_counts = (
+            resolved_df
+            .groupby(["DecisionBucketAsOf", "AgeBucketAsOf"])
+            .size()
+            .reset_index(name="PaperCount")
+        )
+
+#BUILD chart.
+        fig_resolved = px.bar(
+            resolved_counts,
+            x="DecisionBucketAsOf",
+            y="PaperCount",
+            color="AgeBucketAsOf",
+            text="PaperCount",
+            title="Resolved papers by final decision and time-to-decision",
+            custom_data=["DecisionBucketAsOf", "AgeBucketAsOf"],
+            category_orders={"AgeBucketAsOf": labels},
+        )
+
+#FORMAT.
+        fig_resolved.update_layout(
+            height=480,
+            xaxis_title="Final decision",
+            yaxis_title="Resolved papers",
+            legend_title_text="Time to decision",
+            margin=dict(l=10, r=10, t=60, b=100),
+        )
+
+#ROTATE.
+        fig_resolved.update_xaxes(tickangle=25)
+
+#SHOW.
+        resolved_event = st.plotly_chart(
+            fig_resolved,
+            use_container_width=True,
+            key="paper_status_resolved_chart",
+            on_select="rerun",
+        )
+
+#MONTHLY histogram.
+    st.markdown("#### Paper volume over time")
+
+#GROUP by month and stage.
+    month_counts = (
+        paper_status
+        .dropna(subset=["SubmissionMonth"])
+        .groupby(["SubmissionMonth", "StageAsOf"])
+        .size()
+        .reset_index(name="PaperCount")
+    )
+
+#BUILD month histogram.
+    fig_month = px.bar(
+        month_counts,
+        x="SubmissionMonth",
+        y="PaperCount",
+        color="StageAsOf",
+        title="Paper count by submission month and current stage",
+        custom_data=["SubmissionMonth", "StageAsOf"],
+        category_orders={"StageAsOf": stage_order},
+    )
+
+#FORMAT month chart.
+    fig_month.update_layout(
+        height=500,
+        xaxis_title="Submission month",
+        yaxis_title="Number of papers",
+        legend_title_text="Stage as of snapshot",
+        margin=dict(l=10, r=10, t=60, b=80),
+    )
+
+#X-axis every 6 months.
+    fig_month.update_xaxes(
+        dtick="M6",
+        tickformat="%b %Y",
+        tickangle=45,
+    )
+
+#SHOW selectable month chart.
+    month_event = st.plotly_chart(
+        fig_month,
+        use_container_width=True,
+        key="paper_status_month_chart",
+        on_select="rerun",
+    )
+
+#DETAIL DATAFRAME.
+    detail_df = paper_status.copy()
+
+#FILTER from stage chart.
+    if selected_stage:
+#FILTER stage.
+        detail_df = detail_df[detail_df["StageAsOf"] == selected_stage].copy()
+#INFO.
+        st.info(f"Filtered from main chart: {selected_stage}")
+
+#FILTER from unresolved chart.
+    if unresolved_event and "selection" in unresolved_event:
+#GET points.
+        pts = unresolved_event["selection"].get("points", [])
+#IF selected.
+        if pts:
+#GET custom data.
+            cd = pts[0].get("customdata", [])
+#IF valid.
+            if len(cd) >= 2:
+#GET values.
+                clicked_stage = cd[0]
+#GET age.
+                clicked_age = cd[1]
+#FILTER.
+                detail_df = paper_status[
+                    (paper_status["ResolutionStateAsOf"] == "No decision yet")
+                    & (paper_status["StageAsOf"] == clicked_stage)
+                    & (paper_status["AgeBucketAsOf"] == clicked_age)
+                ].copy()
+#INFO.
+                st.info(f"Filtered unresolved papers: {clicked_stage}, age {clicked_age}")
+
+#FILTER from resolved chart.
+    if resolved_event and "selection" in resolved_event:
+#GET points.
+        pts = resolved_event["selection"].get("points", [])
+#IF selected.
+        if pts:
+#GET custom data.
+            cd = pts[0].get("customdata", [])
+#IF valid.
+            if len(cd) >= 2:
+#GET decision.
+                clicked_decision = cd[0]
+#GET age.
+                clicked_age = cd[1]
+#FILTER.
+                detail_df = paper_status[
+                    (paper_status["ResolutionStateAsOf"] == "Resolved")
+                    & (paper_status["DecisionBucketAsOf"] == clicked_decision)
+                    & (paper_status["AgeBucketAsOf"] == clicked_age)
+                ].copy()
+#INFO.
+                st.info(f"Filtered resolved papers: {clicked_decision}, age {clicked_age}")
+
+#FILTER from month chart.
+    if month_event and "selection" in month_event:
+#GET points.
+        pts = month_event["selection"].get("points", [])
+#IF selected.
+        if pts:
+#GET custom data.
+            cd = pts[0].get("customdata", [])
+#IF valid.
+            if len(cd) >= 2:
+#GET month.
+                clicked_month = pd.to_datetime(cd[0], errors="coerce")
+#GET stage.
+                clicked_month_stage = cd[1]
+#FILTER.
+                detail_df = paper_status[
+                    (paper_status["SubmissionMonth"] == clicked_month)
+                    & (paper_status["StageAsOf"] == clicked_month_stage)
+                ].copy()
+#INFO.
+                st.info(f"Filtered papers submitted in {clicked_month.strftime('%b %Y')} at stage: {clicked_month_stage}")
+
+#MANUAL filters.
+    st.markdown("#### Drill down")
+
+#FILTER layout.
+    f1, f2, f3 = st.columns(3)
+
+#STAGE filter.
+    with f1:
+#MULTISELECT.
+        manual_stage = st.multiselect(
+            "Stage",
+            stage_order_existing,
+            default=[],
+            key="paper_status_manual_stage",
+        )
+
+#RESOLUTION filter.
+    with f2:
+#MULTISELECT.
+        manual_resolution = st.multiselect(
+            "Resolution state",
+            ["No decision yet", "Resolved", "Not yet submitted"],
+            default=[],
+            key="paper_status_manual_resolution",
+        )
+
+#AGE filter.
+    with f3:
+#MULTISELECT.
+        manual_age = st.multiselect(
+            "Age bucket",
+            labels + ["Unknown age"],
+            default=[],
+            key="paper_status_manual_age",
+        )
+
+#APPLY manual stage.
+    if manual_stage:
+#FILTER.
+        detail_df = detail_df[detail_df["StageAsOf"].isin(manual_stage)]
+
+#APPLY manual resolution.
+    if manual_resolution:
+#FILTER.
+        detail_df = detail_df[detail_df["ResolutionStateAsOf"].isin(manual_resolution)]
+
+#APPLY manual age.
+    if manual_age:
+#FILTER.
+        detail_df = detail_df[detail_df["AgeBucketAsOf"].isin(manual_age)]
+
+#TABLE columns.
+    cols = [
+        "PaperRoundKey",
+        "PaperID",
+        "SubmissionRound",
+        "JournalSection",
+        "HandlingAssociateEditorID",
+        "HandlingEIC_ID",
+        "StageAsOf",
+        "ResolutionStateAsOf",
+        "DecisionBucketAsOf",
+        "AgeMonthsAsOf",
+        "AgeBucketAsOf",
+        "DatePaperSubmitted",
+        "DateReviewersFullyAssigned",
+        "DateFirstReviewReceived",
+        "DateAllReviewsReceived",
+        "AE_RecommendationDate",
+        "AE_Recommendation",
+        "EIC_DecisionDate",
+        "EIC_Decision",
+        "DateDecisionLetterSent",
+        "FinalDecisionOutcome",
+        "TotalTime_SubmissionToDecision_Days",
+    ]
+
+#KEEP existing columns.
+    cols = [c for c in cols if c in detail_df.columns]
+
+#SHOW count.
+    st.caption(f"Showing {len(detail_df):,} paper-rounds after filters.")
+
+#SHOW table.
+    st.dataframe(
+        detail_df[cols].sort_values(["StageAsOf", "AgeMonthsAsOf"], ascending=[True, False]),
+        use_container_width=True,
+        height=420,
+    )
