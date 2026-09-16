@@ -504,7 +504,8 @@ nav_options = [
     "Paper timeline",
     "Reviewer timeline",
     "AE timeline",
-    "Paper status overview"
+    "Paper status overview",
+    "Recommendation Center"
 ]
 
 # ✅ ONLY override when coming from AE click
@@ -4284,3 +4285,900 @@ if selected_tab == "Paper status overview":
         width='stretch',
         height=420,
     )
+
+#RECOMMENDATION CENTER TAB ONLY.
+if selected_tab == "Recommendation Center":
+#LOCAL imports.
+    import numpy as np
+    import pandas as pd
+    import plotly.express as px
+    import streamlit as st
+
+#SKLEARN imports.
+    try:
+        from sklearn.compose import ColumnTransformer
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import OneHotEncoder
+        from sklearn.impute import SimpleImputer
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score, roc_auc_score
+    except Exception:
+        st.error("Install scikit-learn first: pip install scikit-learn")
+        st.stop()
+
+#TITLE.
+    st.subheader("Recommendation Center: delay risk + next best editorial action")
+
+#USE filtered data if available.
+    try:
+        _paper_src = paper_f
+    except NameError:
+        _paper_src = paper_df
+
+    try:
+        _rev_src = rev_f
+    except NameError:
+        _rev_src = rev_df
+
+#COPY.
+    paper = _paper_src.copy()
+    rev = _rev_src.copy()
+
+#DATE parsing helper.
+    def _rec_to_dt(df, cols):
+        df = df.copy()
+        for c in cols:
+            if c in df.columns:
+                df[c] = pd.to_datetime(df[c], errors="coerce")
+        return df
+
+#PAPER date columns.
+    paper_date_cols = [
+        "DatePaperSubmitted",
+        "DateReviewersFullyAssigned",
+        "DateFirstReviewReceived",
+        "DateAllReviewsReceived",
+        "ReviewPhaseClosedDateAtEnd",
+        "AE_RecommendationDate",
+        "EIC_DecisionDate",
+        "DateDecisionLetterSent",
+    ]
+
+#REVIEWER date columns.
+    rev_date_cols = [
+        "DateReviewerInvited",
+        "DateInvitationAccepted",
+        "DateInvitationResolved",
+        "DateNoResponseCensor",
+        "DateNoResponseTerminal",
+        "DateReviewDue",
+        "DateReviewSubmitted",
+        "DateFirstReminderSent",
+        "DateLastReminderSent",
+        "ReviewerAssignmentTerminalDateAtEnd",
+    ]
+
+#PARSE.
+    paper = _rec_to_dt(paper, paper_date_cols)
+    rev = _rec_to_dt(rev, rev_date_cols)
+
+#GUARDS.
+    if "PaperID" not in paper.columns or "SubmissionRound" not in paper.columns:
+        st.error("PaperHeader must contain PaperID and SubmissionRound.")
+        st.stop()
+
+    if "DatePaperSubmitted" not in paper.columns:
+        st.error("PaperHeader must contain DatePaperSubmitted.")
+        st.stop()
+
+    if "PaperID" not in rev.columns or "SubmissionRound" not in rev.columns:
+        st.error("ReviewerRows must contain PaperID and SubmissionRound.")
+        st.stop()
+
+#BUILD snapshot range.
+    all_dates = []
+    for c in paper_date_cols:
+        if c in paper.columns:
+            all_dates.append(paper[c].dropna())
+
+    if len(all_dates) == 0:
+        st.error("No valid paper dates found.")
+        st.stop()
+
+    all_dates = pd.concat(all_dates)
+    min_snapshot = all_dates.min()
+    max_snapshot = all_dates.max()
+
+#DEFAULT snapshot: late enough to have active + resolved cases.
+    default_snapshot = paper["DatePaperSubmitted"].dropna().quantile(0.70) + pd.Timedelta(days=90)
+
+    if pd.isna(default_snapshot):
+        default_snapshot = min_snapshot + (max_snapshot - min_snapshot) / 2
+
+    default_snapshot = min(max(default_snapshot, min_snapshot), max_snapshot)
+
+#CONTROLS.
+    c0, c1, c2, c3 = st.columns([1.2, 1.0, 1.0, 1.0])
+
+    with c0:
+        snapshot_date = st.date_input(
+            "Snapshot / as-of date",
+            value=default_snapshot.date(),
+            min_value=min_snapshot.date(),
+            max_value=max_snapshot.date(),
+            key="rec_snapshot_date",
+        )
+
+    with c1:
+        delay_quantile = st.selectbox(
+            "Delayed label threshold",
+            [0.65, 0.70, 0.75, 0.80, 0.85],
+            index=2,
+            key="rec_delay_quantile",
+        )
+
+    with c2:
+        top_n = st.slider(
+            "Top recommendations",
+            min_value=5,
+            max_value=50,
+            value=15,
+            step=5,
+            key="rec_top_n",
+        )
+
+    with c3:
+        model_weight = st.slider(
+            "ML weight",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.55,
+            step=0.05,
+            key="rec_model_weight",
+        )
+
+    snapshot_dt = pd.to_datetime(snapshot_date)
+
+#HELPER: event happened by snapshot.
+    def _happened(r, col):
+        if col not in r.index:
+            return False
+        dt = r.get(col, pd.NaT)
+        return pd.notna(dt) and dt <= snapshot_dt
+
+#HELPER: infer stage as of snapshot.
+    def _stage_as_of(r):
+        sub_dt = r.get("DatePaperSubmitted", pd.NaT)
+
+        if pd.isna(sub_dt) or sub_dt > snapshot_dt:
+            return "Not yet submitted", pd.NaT
+
+        if _happened(r, "DateDecisionLetterSent"):
+            return "Resolved: decision sent", r.get("DateDecisionLetterSent", pd.NaT)
+
+        if _happened(r, "EIC_DecisionDate"):
+            return "Waiting: decision letter", r.get("EIC_DecisionDate", pd.NaT)
+
+        if _happened(r, "AE_RecommendationDate"):
+            return "Waiting: EIC decision", r.get("AE_RecommendationDate", pd.NaT)
+
+        if _happened(r, "ReviewPhaseClosedDateAtEnd"):
+            return "Waiting: AE recommendation", r.get("ReviewPhaseClosedDateAtEnd", pd.NaT)
+
+        if _happened(r, "DateAllReviewsReceived"):
+            return "Waiting: AE recommendation", r.get("DateAllReviewsReceived", pd.NaT)
+
+        if _happened(r, "DateFirstReviewReceived"):
+            return "In review: partial reviews received", r.get("DateFirstReviewReceived", pd.NaT)
+
+        if _happened(r, "DateReviewersFullyAssigned"):
+            return "In review: waiting for first review", r.get("DateReviewersFullyAssigned", pd.NaT)
+
+        return "Waiting: reviewer assignment", sub_dt
+
+#HELPER: safe numeric.
+    def _num(s):
+        return pd.to_numeric(s, errors="coerce")
+
+#BUILD paper key.
+    paper["PaperRoundKey"] = (
+        paper["PaperID"].astype(str)
+        + " | round "
+        + paper["SubmissionRound"].astype(int).astype(str)
+    )
+
+#REVIEWER feature engineering as-of snapshot.
+    rev_work = rev.copy()
+
+    if "DateReviewerInvited" in rev_work.columns:
+        rev_work = rev_work[rev_work["DateReviewerInvited"].notna()].copy()
+        rev_work = rev_work[rev_work["DateReviewerInvited"] <= snapshot_dt].copy()
+    else:
+        rev_work = rev_work.iloc[0:0].copy()
+
+    if rev_work.empty:
+        rev_grp = pd.DataFrame(columns=["PaperID", "SubmissionRound"])
+    else:
+        rev_work["InviteOutcomeClean"] = rev_work["InviteOutcome"].astype(str).str.strip().str.lower() if "InviteOutcome" in rev_work.columns else ""
+
+        rev_work["AcceptedAsOfFlag"] = (
+            rev_work["InviteOutcomeClean"].eq("accept")
+            & rev_work["DateInvitationAccepted"].notna()
+            & (rev_work["DateInvitationAccepted"] <= snapshot_dt)
+            if "DateInvitationAccepted" in rev_work.columns
+            else False
+        )
+
+        rev_work["DeclinedAsOfFlag"] = (
+            rev_work["InviteOutcomeClean"].eq("decline")
+            & rev_work["DateInvitationResolved"].notna()
+            & (rev_work["DateInvitationResolved"] <= snapshot_dt)
+            if "DateInvitationResolved" in rev_work.columns
+            else False
+        )
+
+        noresp_date = pd.NaT
+        if "DateNoResponseTerminal" in rev_work.columns:
+            noresp_date = rev_work["DateNoResponseTerminal"]
+        elif "DateInvitationResolved" in rev_work.columns:
+            noresp_date = rev_work["DateInvitationResolved"]
+
+        if isinstance(noresp_date, pd.Series):
+            rev_work["NoResponseAsOfFlag"] = (
+                rev_work["InviteOutcomeClean"].eq("no_response")
+                & noresp_date.notna()
+                & (noresp_date <= snapshot_dt)
+            )
+        else:
+            rev_work["NoResponseAsOfFlag"] = False
+
+        rev_work["SubmittedAsOfFlag"] = (
+            rev_work["DateReviewSubmitted"].notna()
+            & (rev_work["DateReviewSubmitted"] <= snapshot_dt)
+            if "DateReviewSubmitted" in rev_work.columns
+            else False
+        )
+
+        rev_work["DuePassedAsOfFlag"] = (
+            rev_work["DateReviewDue"].notna()
+            & (rev_work["DateReviewDue"] < snapshot_dt)
+            if "DateReviewDue" in rev_work.columns
+            else False
+        )
+
+        rev_work["LateActiveReviewFlag"] = (
+            rev_work["AcceptedAsOfFlag"]
+            & rev_work["DuePassedAsOfFlag"]
+            & ~rev_work["SubmittedAsOfFlag"]
+        )
+
+        rev_work["LateSubmittedReviewFlag"] = (
+            rev_work["SubmittedAsOfFlag"]
+            & rev_work["DateReviewDue"].notna()
+            & (rev_work["DateReviewSubmitted"] > rev_work["DateReviewDue"])
+            if "DateReviewDue" in rev_work.columns and "DateReviewSubmitted" in rev_work.columns
+            else False
+        )
+
+        rev_work["PendingInviteAsOfFlag"] = (
+            ~rev_work["AcceptedAsOfFlag"]
+            & ~rev_work["DeclinedAsOfFlag"]
+            & ~rev_work["NoResponseAsOfFlag"]
+        )
+
+        if "ReviewerWorkloadAtInvite" in rev_work.columns:
+            rev_work["ReviewerWorkloadAtInvite"] = _num(rev_work["ReviewerWorkloadAtInvite"])
+        else:
+            rev_work["ReviewerWorkloadAtInvite"] = np.nan
+
+        if "NumRemindersSent" in rev_work.columns:
+            rev_work["NumRemindersSent"] = _num(rev_work["NumRemindersSent"]).fillna(0)
+        else:
+            rev_work["NumRemindersSent"] = 0
+
+        if "ReviewerDisagreementScore" in rev_work.columns:
+            rev_work["ReviewerDisagreementKnownAsOf"] = np.where(
+                rev_work["SubmittedAsOfFlag"],
+                _num(rev_work["ReviewerDisagreementScore"]),
+                np.nan,
+            )
+        else:
+            rev_work["ReviewerDisagreementKnownAsOf"] = np.nan
+
+        rev_grp = (
+            rev_work
+            .groupby(["PaperID", "SubmissionRound"])
+            .agg(
+                InvitesSentAsOf=("ReviewerID", "count"),
+                AcceptedAsOf=("AcceptedAsOfFlag", "sum"),
+                DeclinedAsOf=("DeclinedAsOfFlag", "sum"),
+                NoResponseAsOf=("NoResponseAsOfFlag", "sum"),
+                PendingInvitesAsOf=("PendingInviteAsOfFlag", "sum"),
+                SubmittedReviewsAsOf=("SubmittedAsOfFlag", "sum"),
+                LateActiveReviewsAsOf=("LateActiveReviewFlag", "sum"),
+                LateSubmittedReviewsAsOf=("LateSubmittedReviewFlag", "sum"),
+                AvgReviewerWorkloadAtInvite=("ReviewerWorkloadAtInvite", "mean"),
+                MaxReviewerWorkloadAtInvite=("ReviewerWorkloadAtInvite", "max"),
+                AvgRemindersSent=("NumRemindersSent", "mean"),
+                MaxDisagreementAsOf=("ReviewerDisagreementKnownAsOf", "max"),
+            )
+            .reset_index()
+        )
+
+#MERGE paper + reviewer features.
+    feat = paper.merge(rev_grp, on=["PaperID", "SubmissionRound"], how="left")
+
+#FILL reviewer aggregate blanks.
+    fill_zero_cols = [
+        "InvitesSentAsOf",
+        "AcceptedAsOf",
+        "DeclinedAsOf",
+        "NoResponseAsOf",
+        "PendingInvitesAsOf",
+        "SubmittedReviewsAsOf",
+        "LateActiveReviewsAsOf",
+        "LateSubmittedReviewsAsOf",
+        "AvgRemindersSent",
+    ]
+
+    for c in fill_zero_cols:
+        if c in feat.columns:
+            feat[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0)
+
+    for c in ["AvgReviewerWorkloadAtInvite", "MaxReviewerWorkloadAtInvite", "MaxDisagreementAsOf"]:
+        if c in feat.columns:
+            feat[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0)
+
+#STAGE as of snapshot.
+    stage_info = feat.apply(_stage_as_of, axis=1, result_type="expand")
+    feat["StageAsOf"] = stage_info[0]
+    feat["StageStartDateAsOf"] = pd.to_datetime(stage_info[1], errors="coerce")
+
+#DROP future papers for recommendation.
+    feat = feat[feat["StageAsOf"] != "Not yet submitted"].copy()
+
+#RESOLUTION state.
+    feat["ResolutionStateAsOf"] = np.where(
+        feat["StageAsOf"].eq("Resolved: decision sent"),
+        "Resolved",
+        "No decision yet",
+    )
+
+#AGE features.
+    feat["DaysSinceSubmission"] = (snapshot_dt - feat["DatePaperSubmitted"]).dt.days.clip(lower=0)
+    feat["DaysInCurrentStage"] = (snapshot_dt - feat["StageStartDateAsOf"]).dt.days.clip(lower=0)
+
+#STAGE order.
+    stage_order = [
+        "Waiting: reviewer assignment",
+        "In review: waiting for first review",
+        "In review: partial reviews received",
+        "Waiting: AE recommendation",
+        "Waiting: EIC decision",
+        "Waiting: decision letter",
+        "Resolved: decision sent",
+    ]
+
+    stage_index = {s: i for i, s in enumerate(stage_order)}
+    feat["StageIndex"] = feat["StageAsOf"].map(stage_index).fillna(0)
+
+#TARGET reviewers.
+    if "TargetNumberOfReviewers" in feat.columns:
+        feat["TargetReviewers"] = _num(feat["TargetNumberOfReviewers"]).fillna(3)
+    else:
+        feat["TargetReviewers"] = 3
+
+    feat["MissingAcceptedReviewers"] = (feat["TargetReviewers"] - feat["AcceptedAsOf"]).clip(lower=0)
+    feat["MissingSubmittedReviews"] = (feat["TargetReviewers"] - feat["SubmittedReviewsAsOf"]).clip(lower=0)
+
+#FINAL total days for training target.
+    if "TotalTime_SubmissionToDecision_Days" in feat.columns:
+        feat["FinalTotalDays"] = _num(feat["TotalTime_SubmissionToDecision_Days"])
+    elif "DateDecisionLetterSent" in feat.columns:
+        feat["FinalTotalDays"] = (feat["DateDecisionLetterSent"] - feat["DatePaperSubmitted"]).dt.days
+    else:
+        feat["FinalTotalDays"] = np.nan
+
+#PHASE 1: RULE-BASED RECOMMENDER.
+    st.markdown("### Phase 1 — Rule-based editorial recommendations")
+
+#THRESHOLDS.
+    with st.expander("Rule thresholds"):
+        t1, t2, t3, t4, t5 = st.columns(5)
+
+        with t1:
+            assign_days = st.slider("Assignment wait days", 3, 60, 14, 1)
+
+        with t2:
+            review_days = st.slider("Review wait days", 7, 120, 35, 1)
+
+        with t3:
+            ae_days = st.slider("AE wait days", 3, 60, 10, 1)
+
+        with t4:
+            eic_days = st.slider("EIC wait days", 3, 60, 7, 1)
+
+        with t5:
+            disagreement_cutoff = st.slider("Disagreement cutoff", 0.0, 1.0, 0.65, 0.05)
+
+#RULE function.
+    def _rule_recommendation(r):
+        stage = str(r.get("StageAsOf", ""))
+        days_stage = float(r.get("DaysInCurrentStage", 0) or 0)
+
+        noresp = int(r.get("NoResponseAsOf", 0) or 0)
+        pending = int(r.get("PendingInvitesAsOf", 0) or 0)
+        late_active = int(r.get("LateActiveReviewsAsOf", 0) or 0)
+        missing_accept = int(r.get("MissingAcceptedReviewers", 0) or 0)
+        missing_submit = int(r.get("MissingSubmittedReviews", 0) or 0)
+
+        avg_workload = float(r.get("AvgReviewerWorkloadAtInvite", 0) or 0)
+        max_disagree = float(r.get("MaxDisagreementAsOf", 0) or 0)
+
+        action = "No action needed"
+        score = 10
+        reasons = []
+
+        if stage == "Resolved: decision sent":
+            return pd.Series({
+                "RuleRecommendedAction": "No action — resolved",
+                "RulePriorityScore": 0,
+                "RulePriorityBand": "Resolved",
+                "RuleExplanation": "Paper already has a decision letter."
+            })
+
+        if stage == "Waiting: reviewer assignment":
+            score += min(days_stage * 2, 35)
+
+            if days_stage >= assign_days or missing_accept > 0:
+                action = "Invite / assign additional reviewers"
+                score += 35
+                reasons.append(f"paper has waited {int(days_stage)} days in reviewer assignment")
+                reasons.append(f"{missing_accept} reviewer slots still need accepted reviewers")
+
+        elif stage in ["In review: waiting for first review", "In review: partial reviews received"]:
+            score += min(days_stage * 1.5, 35)
+
+            if late_active > 0:
+                action = "Send reviewer reminder"
+                score += 30 + 8 * late_active
+                reasons.append(f"{late_active} active reviewer assignment(s) are past due")
+
+            if noresp > 0 and missing_submit > 0:
+                action = "Invite replacement reviewer"
+                score += 40 + 8 * noresp
+                reasons.append(f"{noresp} reviewer invitation(s) ended in no response")
+                reasons.append(f"{missing_submit} required review(s) are still missing")
+
+            elif days_stage >= review_days and missing_submit > 0:
+                action = "Review overdue assignments"
+                score += 35
+                reasons.append(f"paper has spent {int(days_stage)} days in review")
+                reasons.append(f"{missing_submit} required review(s) are still missing")
+
+            if pending > 0:
+                score += 8
+                reasons.append(f"{pending} reviewer invitation(s) are still pending")
+
+        elif stage == "Waiting: AE recommendation":
+            score += min(days_stage * 2, 40)
+
+            if days_stage >= ae_days:
+                action = "Escalate to AE"
+                score += 35
+                reasons.append(f"all reviews are closed, but AE recommendation has been pending for {int(days_stage)} days")
+            else:
+                action = "AE recommendation pending"
+                reasons.append("all reviews are available and the paper is waiting for AE recommendation")
+
+        elif stage == "Waiting: EIC decision":
+            score += min(days_stage * 2, 40)
+
+            if days_stage >= eic_days:
+                action = "Prioritize for EIC decision"
+                score += 35
+                reasons.append(f"AE recommendation is complete, but EIC decision has been pending for {int(days_stage)} days")
+            else:
+                action = "EIC decision pending"
+                reasons.append("paper is waiting for EIC decision")
+
+        elif stage == "Waiting: decision letter":
+            action = "Send / finalize decision letter"
+            score += 45
+            reasons.append(f"EIC decision exists, but decision letter has not been sent for {int(days_stage)} days")
+
+        if max_disagree >= disagreement_cutoff:
+            score += 15
+            reasons.append(f"reviewer disagreement score is high ({max_disagree:.2f})")
+
+            if action == "No action needed":
+                action = "Flag reviewer disagreement"
+
+        if avg_workload >= 8:
+            score += 8
+            reasons.append(f"average reviewer workload at invite is high ({avg_workload:.1f})")
+
+        score = int(min(max(score, 0), 100))
+
+        if score >= 70:
+            band = "High"
+        elif score >= 40:
+            band = "Medium"
+        else:
+            band = "Low"
+
+        if not reasons:
+            reasons.append("no strong workflow risk signal detected")
+
+        return pd.Series({
+            "RuleRecommendedAction": action,
+            "RulePriorityScore": score,
+            "RulePriorityBand": band,
+            "RuleExplanation": "; ".join(reasons)
+        })
+
+#APPLY rules.
+    rule_out = feat.apply(_rule_recommendation, axis=1)
+    feat = pd.concat([feat, rule_out], axis=1)
+
+#PHASE 2: RANDOM FOREST DELAY-RISK MODEL.
+    st.markdown("### Phase 2 — Random Forest delay-risk model")
+
+#TRAINING DATA.
+    train_df = feat.dropna(subset=["FinalTotalDays"]).copy()
+    train_df = train_df[train_df["FinalTotalDays"] >= 0].copy()
+
+#CHECK target.
+    model_ready = False
+    model_msg = ""
+
+    if len(train_df) < 30:
+        model_msg = "Not enough rows with final total days to train the model. Need at least 30."
+    else:
+        delay_cutoff = float(train_df["FinalTotalDays"].quantile(delay_quantile))
+        train_df["DelayedTarget"] = (train_df["FinalTotalDays"] >= delay_cutoff).astype(int)
+
+        if train_df["DelayedTarget"].nunique() < 2:
+            model_msg = "Training target has only one class. Change delayed threshold or check dataset."
+        else:
+#FEATURES.
+            numeric_features = [
+                "SubmissionRound",
+                "StageIndex",
+                "DaysSinceSubmission",
+                "DaysInCurrentStage",
+                "InvitesSentAsOf",
+                "AcceptedAsOf",
+                "DeclinedAsOf",
+                "NoResponseAsOf",
+                "PendingInvitesAsOf",
+                "SubmittedReviewsAsOf",
+                "LateActiveReviewsAsOf",
+                "LateSubmittedReviewsAsOf",
+                "AvgReviewerWorkloadAtInvite",
+                "MaxReviewerWorkloadAtInvite",
+                "AvgRemindersSent",
+                "MaxDisagreementAsOf",
+                "TargetReviewers",
+                "MissingAcceptedReviewers",
+                "MissingSubmittedReviews",
+            ]
+
+            categorical_features = [
+                "StageAsOf",
+                "JournalSection",
+                "PaperStatusOnSubmission",
+                "HandlingAssociateEditorID",
+                "HandlingEIC_ID",
+            ]
+
+            numeric_features = [c for c in numeric_features if c in train_df.columns]
+            categorical_features = [c for c in categorical_features if c in train_df.columns]
+
+#ONE-HOT version compatibility.
+            try:
+                encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+            except TypeError:
+                encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+#PREPROCESSOR.
+            preprocess = ColumnTransformer(
+                transformers=[
+                    ("num", SimpleImputer(strategy="median"), numeric_features),
+                    ("cat", Pipeline(steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", encoder),
+                    ]), categorical_features),
+                ]
+            )
+
+#MODEL.
+            rf = RandomForestClassifier(
+                n_estimators=300,
+                max_depth=7,
+                min_samples_leaf=3,
+                class_weight="balanced",
+                random_state=42,
+            )
+
+#PIPELINE.
+            model = Pipeline(
+                steps=[
+                    ("preprocess", preprocess),
+                    ("model", rf),
+                ]
+            )
+
+#SPLIT.
+            stratify_y = train_df["DelayedTarget"] if train_df["DelayedTarget"].value_counts().min() >= 2 else None
+
+            X = train_df[numeric_features + categorical_features]
+            y = train_df["DelayedTarget"]
+
+            X_train, X_test, y_train, y_test = train_test_split(
+                X,
+                y,
+                test_size=0.25,
+                random_state=42,
+                stratify=stratify_y,
+            )
+
+#TRAIN.
+            model.fit(X_train, y_train)
+
+#EVALUATE.
+            y_pred = model.predict(X_test)
+            y_prob = model.predict_proba(X_test)[:, 1]
+
+            acc = accuracy_score(y_test, y_pred)
+
+            try:
+                auc = roc_auc_score(y_test, y_prob)
+            except Exception:
+                auc = np.nan
+
+            model_ready = True
+            model_msg = f"Model trained. Delayed = final turnaround >= {delay_cutoff:.1f} days."
+
+#PREDICT active papers.
+    active = feat[feat["ResolutionStateAsOf"] == "No decision yet"].copy()
+
+    if active.empty:
+        st.info("No active / no-decision papers at this snapshot date.")
+        st.stop()
+
+    if model_ready:
+        active["MLDelayRisk"] = model.predict_proba(active[numeric_features + categorical_features])[:, 1]
+    else:
+        active["MLDelayRisk"] = active["RulePriorityScore"] / 100.0
+
+#COMBINE PHASE 1 + PHASE 2.
+    active["CombinedPriorityScore"] = (
+        model_weight * active["MLDelayRisk"] * 100.0
+        + (1.0 - model_weight) * active["RulePriorityScore"]
+    ).round(1)
+
+    active["CombinedPriorityBand"] = pd.cut(
+        active["CombinedPriorityScore"],
+        bins=[-1, 39.99, 69.99, 100],
+        labels=["Low", "Medium", "High"],
+    ).astype(str)
+
+#SORT.
+    active = active.sort_values(
+        ["CombinedPriorityScore", "RulePriorityScore", "DaysSinceSubmission"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+
+#TOP METRICS.
+    m1, m2, m3, m4, m5 = st.columns(5)
+
+    m1.metric("Active papers", f"{len(active):,}")
+    m2.metric("High priority", f"{int((active['CombinedPriorityBand'] == 'High').sum()):,}")
+    m3.metric("Median ML risk", f"{active['MLDelayRisk'].median():.2f}")
+    m4.metric("Median priority", f"{active['CombinedPriorityScore'].median():.1f}")
+
+    if model_ready:
+        m5.metric("Model AUC", f"{auc:.2f}" if not np.isnan(auc) else "NA")
+        st.caption(f"{model_msg} Test accuracy: {acc:.2f}")
+    else:
+        m5.metric("Model AUC", "Fallback")
+        st.warning(model_msg + " Using rule score as fallback risk.")
+
+#ACTION counts.
+    action_counts = (
+        active
+        .groupby(["RuleRecommendedAction", "CombinedPriorityBand"])
+        .size()
+        .reset_index(name="PaperCount")
+    )
+
+    fig_actions = px.bar(
+        action_counts,
+        x="RuleRecommendedAction",
+        y="PaperCount",
+        color="CombinedPriorityBand",
+        text="PaperCount",
+        title="Recommended actions by priority",
+        category_orders={"CombinedPriorityBand": ["High", "Medium", "Low"]},
+    )
+
+    fig_actions.update_layout(
+        height=430,
+        xaxis_title="Recommended action",
+        yaxis_title="Number of active papers",
+        legend_title_text="Priority",
+        margin=dict(l=10, r=10, t=60, b=120),
+    )
+
+    fig_actions.update_xaxes(tickangle=35)
+
+    st.plotly_chart(fig_actions, use_container_width=True)
+
+#PRIORITY map.
+    st.markdown("#### Priority map: click a point to open the Paper timeline")
+
+    fig_priority = px.scatter(
+        active,
+        x="DaysSinceSubmission",
+        y="CombinedPriorityScore",
+        color="RuleRecommendedAction",
+        size="DaysInCurrentStage",
+        hover_name="PaperRoundKey",
+        hover_data={
+            "StageAsOf": True,
+            "MLDelayRisk": ":.2f",
+            "RulePriorityScore": True,
+            "RuleExplanation": True,
+            "CombinedPriorityScore": True,
+            "DaysInCurrentStage": True,
+        },
+        custom_data=["PaperRoundKey"],
+        title="Active papers by age and recommendation priority",
+    )
+
+    fig_priority.update_layout(
+        height=520,
+        xaxis_title="Days since submission",
+        yaxis_title="Combined priority score",
+        margin=dict(l=10, r=10, t=60, b=60),
+    )
+
+    priority_event = st.plotly_chart(
+        fig_priority,
+        use_container_width=True,
+        key="recommendation_priority_map",
+        on_select="rerun",
+    )
+
+#CLICK point -> Paper timeline.
+    if priority_event and "selection" in priority_event:
+        pts = priority_event["selection"].get("points", [])
+        if pts:
+            cd = pts[0].get("customdata", [])
+            if len(cd) >= 1:
+                clicked_paper = cd[0]
+                st.session_state["selected_paper_from_ae"] = clicked_paper
+                st.session_state["active_tab"] = "Paper timeline"
+                st.session_state["from_ae_click"] = True
+                st.rerun()
+
+#STAGE chart.
+    stage_counts = (
+        active
+        .groupby(["StageAsOf", "CombinedPriorityBand"])
+        .size()
+        .reset_index(name="PaperCount")
+    )
+
+    fig_stage = px.bar(
+        stage_counts,
+        x="StageAsOf",
+        y="PaperCount",
+        color="CombinedPriorityBand",
+        text="PaperCount",
+        title="Active papers by workflow stage and priority",
+        category_orders={
+            "StageAsOf": stage_order,
+            "CombinedPriorityBand": ["High", "Medium", "Low"],
+        },
+    )
+
+    fig_stage.update_layout(
+        height=460,
+        xaxis_title="Current workflow stage",
+        yaxis_title="Number of active papers",
+        legend_title_text="Priority",
+        margin=dict(l=10, r=10, t=60, b=130),
+    )
+
+    fig_stage.update_xaxes(tickangle=35)
+
+    st.plotly_chart(fig_stage, use_container_width=True)
+
+#FEATURE IMPORTANCE.
+    if model_ready:
+        with st.expander("Random Forest feature importance"):
+            try:
+                feature_names = model.named_steps["preprocess"].get_feature_names_out()
+                importances = model.named_steps["model"].feature_importances_
+
+                imp_df = (
+                    pd.DataFrame({
+                        "Feature": feature_names,
+                        "Importance": importances,
+                    })
+                    .sort_values("Importance", ascending=False)
+                    .head(20)
+                )
+
+                fig_imp = px.bar(
+                    imp_df,
+                    x="Importance",
+                    y="Feature",
+                    orientation="h",
+                    title="Top model features",
+                )
+
+                fig_imp.update_layout(
+                    height=520,
+                    yaxis=dict(autorange="reversed"),
+                    margin=dict(l=10, r=10, t=60, b=40),
+                )
+
+                st.plotly_chart(fig_imp, use_container_width=True)
+
+            except Exception as e:
+                st.info(f"Feature importance unavailable: {e}")
+
+#TOP recommendations table.
+    st.markdown("#### Top recommended interventions")
+
+    show_cols = [
+        "PaperRoundKey",
+        "StageAsOf",
+        "RuleRecommendedAction",
+        "CombinedPriorityBand",
+        "CombinedPriorityScore",
+        "MLDelayRisk",
+        "RulePriorityScore",
+        "DaysSinceSubmission",
+        "DaysInCurrentStage",
+        "InvitesSentAsOf",
+        "AcceptedAsOf",
+        "SubmittedReviewsAsOf",
+        "NoResponseAsOf",
+        "LateActiveReviewsAsOf",
+        "PendingInvitesAsOf",
+        "MissingSubmittedReviews",
+        "AvgReviewerWorkloadAtInvite",
+        "MaxDisagreementAsOf",
+        "RuleExplanation",
+        "JournalSection",
+        "HandlingAssociateEditorID",
+        "HandlingEIC_ID",
+    ]
+
+    show_cols = [c for c in show_cols if c in active.columns]
+
+    st.dataframe(
+        active[show_cols].head(top_n),
+        use_container_width=True,
+        height=420,
+    )
+
+#OPEN selected paper.
+    st.markdown("#### Open recommendation in Paper timeline")
+
+    selected_rec_paper = st.selectbox(
+        "Select paper-round",
+        active["PaperRoundKey"].drop_duplicates().tolist(),
+        key="recommendation_open_paper_select",
+    )
+
+    if st.button("Open selected paper in Paper timeline", key="recommendation_open_paper_button"):
+        st.session_state["selected_paper_from_ae"] = selected_rec_paper
+        st.session_state["active_tab"] = "Paper timeline"
+        st.session_state["from_ae_click"] = True
+        st.rerun()
