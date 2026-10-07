@@ -20,9 +20,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from scipy import stats
+from pathlib import Path
+import ast
 
 warnings.filterwarnings("ignore")
-
 
 # -----------------------------
 # App config
@@ -505,7 +506,8 @@ nav_options = [
     "Reviewer timeline",
     "AE timeline",
     "Paper status overview",
-    "Recommendation Center"
+    "Recommendation Center",
+    "AI Scientist"
 ]
 
 # ✅ ONLY override when coming from AE click
@@ -5182,3 +5184,2046 @@ if selected_tab == "Recommendation Center":
         st.session_state["active_tab"] = "Paper timeline"
         st.session_state["from_ae_click"] = True
         st.rerun()
+
+if selected_tab == "AI Scientist":
+        # ============================================================
+        # AI SCIENTIST
+        # Multi-reviewer visualization for PaperReviews.csv
+        # ============================================================
+
+        st.header("AI Scientist")
+
+        st.caption(
+            "Explore reviewer feedback, score distributions, reviewer behaviour, "
+            "consensus, disagreement, and papers requiring closer human inspection."
+        )
+
+        # ============================================================
+        # LOAD DATA
+        # ============================================================
+
+        base_dir = Path(__file__).resolve().parent
+        reviews_path = base_dir / "PaperReviews.csv"
+
+        if not reviews_path.exists():
+            st.error(
+                "PaperReviews.csv was not found in the same directory "
+                "as this Streamlit application."
+            )
+            st.stop()
+
+        reviews = pd.read_csv(reviews_path)
+
+        # ============================================================
+        # VALIDATE DATA
+        # ============================================================
+
+        required_columns = [
+            "PaperID",
+            "PaperTitle",
+            "ReviewerID",
+            "ReviewerPersona",
+            "Summary",
+            "Strengths",
+            "Weaknesses",
+            "Relevance",
+            "Conclusion",
+            "Score",
+            "Decision",
+        ]
+
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in reviews.columns
+        ]
+
+        if missing_columns:
+            st.error(
+                "PaperReviews.csv is missing required columns: "
+                + ", ".join(missing_columns)
+            )
+            st.stop()
+
+        # ============================================================
+        # CLEAN DATA
+        # ============================================================
+
+        reviews["PaperID"] = pd.to_numeric(
+            reviews["PaperID"],
+            errors="coerce",
+        )
+
+        reviews["Score"] = pd.to_numeric(
+            reviews["Score"],
+            errors="coerce",
+        )
+
+        reviews = reviews.dropna(
+            subset=[
+                "PaperID",
+                "PaperTitle",
+                "ReviewerID",
+                "Score",
+                "Decision",
+            ]
+        ).copy()
+
+        reviews["PaperID"] = reviews["PaperID"].astype(int)
+
+        reviews = reviews.sort_values(
+            [
+                "PaperID",
+                "ReviewerID",
+            ]
+        )
+
+        text_columns = [
+            "Summary",
+            "Strengths",
+            "Weaknesses",
+            "Relevance",
+            "Conclusion",
+            "ReviewerPersona",
+        ]
+
+        for column in text_columns:
+            reviews[column] = (
+                reviews[column]
+                .fillna("")
+                .astype(str)
+            )
+
+        # ============================================================
+        # DECISION ORDER
+        # ============================================================
+
+        decision_order = [
+            "Reject",
+            "Major Revision",
+            "Minor Revision",
+            "Accept",
+        ]
+
+        # ============================================================
+        # HELPER FUNCTIONS
+        # ============================================================
+
+        def get_consensus(group):
+
+            counts = group["Decision"].value_counts()
+
+            if counts.empty:
+                return "Unknown"
+
+            max_votes = counts.max()
+
+            winners = counts[
+                counts == max_votes
+            ].index.tolist()
+
+            if len(winners) > 1:
+                return "Split"
+
+            return winners[0]
+
+        def get_agreement_ratio(group):
+
+            counts = group["Decision"].value_counts()
+
+            if counts.empty:
+                return 0.0
+
+            return float(
+                counts.max()
+                / len(group)
+            )
+
+        def parse_review_list(value):
+
+            if pd.isna(value):
+                return []
+
+            if isinstance(value, list):
+                return value
+
+            try:
+                parsed = ast.literal_eval(
+                    str(value)
+                )
+
+                if isinstance(parsed, list):
+                    return parsed
+
+            except Exception:
+                pass
+
+            return [str(value)]
+
+        # ============================================================
+        # BUILD PAPER-LEVEL DATASET
+        # ============================================================
+
+        paper_rows = []
+
+        for (
+            paper_id,
+            paper_title,
+        ), group in reviews.groupby(
+            [
+                "PaperID",
+                "PaperTitle",
+            ]
+        ):
+
+            scores = group["Score"]
+
+            consensus = get_consensus(
+                group
+            )
+
+            agreement_ratio = (
+                get_agreement_ratio(
+                    group
+                )
+            )
+
+            score_range = float(
+                scores.max()
+                - scores.min()
+            )
+
+            score_std = float(
+                scores.std(
+                    ddof=0
+                )
+            )
+
+            decision_diversity = int(
+                group[
+                    "Decision"
+                ].nunique()
+            )
+
+            paper_rows.append(
+                {
+                    "PaperID":
+                        int(paper_id),
+
+                    "PaperTitle":
+                        paper_title,
+
+                    "ReviewerCount":
+                        int(len(group)),
+
+                    "MeanScore":
+                        float(
+                            scores.mean()
+                        ),
+
+                    "MedianScore":
+                        float(
+                            scores.median()
+                        ),
+
+                    "MinScore":
+                        float(
+                            scores.min()
+                        ),
+
+                    "MaxScore":
+                        float(
+                            scores.max()
+                        ),
+
+                    "ScoreRange":
+                        score_range,
+
+                    "ScoreStd":
+                        score_std,
+
+                    "DecisionDiversity":
+                        decision_diversity,
+
+                    "ConsensusDecision":
+                        consensus,
+
+                    "AgreementRatio":
+                        agreement_ratio,
+
+                    "RejectVotes":
+                        int(
+                            (
+                                group[
+                                    "Decision"
+                                ]
+                                == "Reject"
+                            ).sum()
+                        ),
+
+                    "MajorRevisionVotes":
+                        int(
+                            (
+                                group[
+                                    "Decision"
+                                ]
+                                == "Major Revision"
+                            ).sum()
+                        ),
+
+                    "MinorRevisionVotes":
+                        int(
+                            (
+                                group[
+                                    "Decision"
+                                ]
+                                == "Minor Revision"
+                            ).sum()
+                        ),
+
+                    "AcceptVotes":
+                        int(
+                            (
+                                group[
+                                    "Decision"
+                                ]
+                                == "Accept"
+                            ).sum()
+                        ),
+                }
+            )
+
+        papers = pd.DataFrame(
+            paper_rows
+        )
+
+        # ============================================================
+        # CLASSIFY DISAGREEMENT
+        # ============================================================
+
+        def classify_disagreement(row):
+
+            if (
+                row[
+                    "ConsensusDecision"
+                ]
+                == "Split"
+                or row[
+                    "ScoreRange"
+                ] >= 2.0
+            ):
+                return "High"
+
+            if (
+                row[
+                    "ScoreRange"
+                ] >= 1.0
+                or row[
+                    "AgreementRatio"
+                ] < 1.0
+            ):
+                return "Moderate"
+
+            return "Low"
+
+        papers[
+            "DisagreementLevel"
+        ] = papers.apply(
+            classify_disagreement,
+            axis=1,
+        )
+
+        # ============================================================
+        # HUMAN ATTENTION SCORE
+        # ============================================================
+
+        normalized_score_range = np.clip(
+            papers[
+                "ScoreRange"
+            ] / 3.0,
+            0,
+            1,
+        )
+
+        normalized_decision_diversity = np.clip(
+            (
+                papers[
+                    "DecisionDiversity"
+                ]
+                - 1
+            ) / 2.0,
+            0,
+            1,
+        )
+
+        lack_of_agreement = (
+            1
+            - papers[
+                "AgreementRatio"
+            ]
+        )
+
+        papers[
+            "HumanAttentionScore"
+        ] = (
+            0.50
+            * normalized_score_range
+            +
+            0.30
+            * normalized_decision_diversity
+            +
+            0.20
+            * lack_of_agreement
+        )
+
+        papers[
+            "HumanAttentionScore"
+        ] = np.clip(
+            papers[
+                "HumanAttentionScore"
+            ],
+            0,
+            1,
+        )
+
+        # ============================================================
+        # GLOBAL FILTERS
+        # ============================================================
+
+        filter_col1, filter_col2, filter_col3 = st.columns(
+            3
+        )
+
+        decision_options = [
+            "All"
+        ] + sorted(
+            reviews[
+                "Decision"
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        selected_decision = (
+            filter_col1.selectbox(
+                "Reviewer decision",
+                decision_options,
+                key="ai_scientist_decision_filter",
+            )
+        )
+
+        persona_options = [
+            "All"
+        ] + sorted(
+            reviews[
+                "ReviewerPersona"
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        selected_persona = (
+            filter_col2.selectbox(
+                "Reviewer persona",
+                persona_options,
+                key="ai_scientist_persona_filter",
+            )
+        )
+
+        disagreement_options = [
+            "All",
+            "Low",
+            "Moderate",
+            "High",
+        ]
+
+        selected_disagreement = (
+            filter_col3.selectbox(
+                "Paper disagreement",
+                disagreement_options,
+                key="ai_scientist_disagreement_filter",
+            )
+        )
+
+        filtered_reviews = (
+            reviews.copy()
+        )
+
+        if selected_decision != "All":
+            filtered_reviews = (
+                filtered_reviews[
+                    filtered_reviews[
+                        "Decision"
+                    ]
+                    == selected_decision
+                ]
+            )
+
+        if selected_persona != "All":
+            filtered_reviews = (
+                filtered_reviews[
+                    filtered_reviews[
+                        "ReviewerPersona"
+                    ]
+                    == selected_persona
+                ]
+            )
+
+        filtered_papers = (
+            papers.copy()
+        )
+
+        if (
+            selected_disagreement
+            != "All"
+        ):
+            filtered_papers = (
+                filtered_papers[
+                    filtered_papers[
+                        "DisagreementLevel"
+                    ]
+                    == selected_disagreement
+                ]
+            )
+
+        # ============================================================
+        # INTERNAL AI SCIENTIST TABS
+        # ============================================================
+
+        (
+            corpus_tab,
+            paper_tab,
+            reviewer_tab,
+            disagreement_tab,
+        ) = st.tabs(
+            [
+                "Corpus Overview",
+                "Paper Explorer",
+                "Reviewer Analysis",
+                "Consensus & Disagreement",
+            ]
+        )
+
+        # ============================================================
+        # CORPUS OVERVIEW
+        # ============================================================
+
+        with corpus_tab:
+
+            st.subheader(
+                "Corpus Overview"
+            )
+
+            metric1, metric2, metric3, metric4, metric5 = st.columns(
+                5
+            )
+
+            metric1.metric(
+                "Papers",
+                f"{reviews['PaperID'].nunique():,}",
+            )
+
+            metric2.metric(
+                "Reviews",
+                f"{len(reviews):,}",
+            )
+
+            metric3.metric(
+                "Reviewers",
+                f"{reviews['ReviewerID'].nunique():,}",
+            )
+
+            metric4.metric(
+                "Mean Review Score",
+                f"{reviews['Score'].mean():.2f}",
+            )
+
+            metric5.metric(
+                "Reviews / Paper",
+                (
+                    f"{len(reviews) / reviews['PaperID'].nunique():.2f}"
+                ),
+            )
+
+            st.divider()
+
+            # ========================================================
+            # REVIEW SCORE + DECISION DISTRIBUTION
+            # ========================================================
+
+            col1, col2 = st.columns(
+                2
+            )
+
+            with col1:
+
+                fig_score_distribution = (
+                    px.histogram(
+                        filtered_reviews,
+                        x="Score",
+                        nbins=18,
+                        title=(
+                            "Individual Review Score Distribution"
+                        ),
+                        labels={
+                            "Score":
+                                "Reviewer score"
+                        },
+                    )
+                )
+
+                if (
+                    len(
+                        filtered_reviews
+                    ) > 0
+                ):
+                    fig_score_distribution.add_vline(
+                        x=filtered_reviews[
+                            "Score"
+                        ].mean(),
+                        line_dash="dash",
+                        annotation_text=(
+                            f"Mean = "
+                            f"{filtered_reviews['Score'].mean():.2f}"
+                        ),
+                    )
+
+                fig_score_distribution.update_layout(
+                    yaxis_title=(
+                        "Number of reviews"
+                    ),
+                    bargap=0.05,
+                )
+
+                st.plotly_chart(
+                    fig_score_distribution,
+                    use_container_width=True,
+                )
+
+            with col2:
+
+                decision_counts = (
+                    filtered_reviews[
+                        "Decision"
+                    ]
+                    .value_counts()
+                    .reindex(
+                        decision_order,
+                        fill_value=0,
+                    )
+                    .reset_index()
+                )
+
+                decision_counts.columns = [
+                    "Decision",
+                    "Reviews",
+                ]
+
+                fig_decisions = px.bar(
+                    decision_counts,
+                    x="Decision",
+                    y="Reviews",
+                    text="Reviews",
+                    title=(
+                        "Reviewer Decision Distribution"
+                    ),
+                )
+
+                fig_decisions.update_layout(
+                    xaxis_title="",
+                    yaxis_title=(
+                        "Number of reviews"
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig_decisions,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # PAPER SCORE DISTRIBUTION
+            # ========================================================
+
+            col1, col2 = st.columns(
+                2
+            )
+
+            with col1:
+
+                fig_paper_score = (
+                    px.histogram(
+                        filtered_papers,
+                        x="MeanScore",
+                        nbins=15,
+                        title=(
+                            "Paper-Level Mean Review Score"
+                        ),
+                        labels={
+                            "MeanScore":
+                                "Mean reviewer score"
+                        },
+                    )
+                )
+
+                fig_paper_score.update_layout(
+                    yaxis_title=(
+                        "Number of papers"
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig_paper_score,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # REVIEWS PER PAPER
+            # ========================================================
+
+            with col2:
+
+                review_count_distribution = (
+                    papers[
+                        "ReviewerCount"
+                    ]
+                    .value_counts()
+                    .sort_index()
+                    .reset_index()
+                )
+
+                review_count_distribution.columns = [
+                    "Reviewers",
+                    "Papers",
+                ]
+
+                fig_review_count = px.bar(
+                    review_count_distribution,
+                    x="Reviewers",
+                    y="Papers",
+                    text="Papers",
+                    title=(
+                        "Number of Reviews per Paper"
+                    ),
+                )
+
+                fig_review_count.update_layout(
+                    xaxis_title=(
+                        "Reviews per paper"
+                    ),
+                    yaxis_title=(
+                        "Number of papers"
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig_review_count,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # SCORE EVOLUTION
+            # ========================================================
+
+            st.subheader(
+                "Review Score Evolution"
+            )
+
+            temporal = (
+                papers
+                .sort_values(
+                    "PaperID"
+                )
+                .copy()
+            )
+
+            temporal[
+                "RollingMean"
+            ] = (
+                temporal[
+                    "MeanScore"
+                ]
+                .rolling(
+                    window=10,
+                    min_periods=3,
+                    center=True,
+                )
+                .mean()
+            )
+
+            fig_temporal = go.Figure()
+
+            fig_temporal.add_trace(
+                go.Scatter(
+                    x=temporal[
+                        "PaperID"
+                    ],
+                    y=temporal[
+                        "MeanScore"
+                    ],
+                    mode="markers",
+                    name=(
+                        "Paper mean score"
+                    ),
+                    text=temporal[
+                        "PaperTitle"
+                    ],
+                    customdata=np.stack(
+                        [
+                            temporal[
+                                "ReviewerCount"
+                            ],
+                            temporal[
+                                "ScoreRange"
+                            ],
+                        ],
+                        axis=-1,
+                    ),
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Paper %{x}<br>"
+                        "Mean score: %{y:.2f}<br>"
+                        "Reviewers: %{customdata[0]}<br>"
+                        "Score range: %{customdata[1]:.2f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+
+            fig_temporal.add_trace(
+                go.Scatter(
+                    x=temporal[
+                        "PaperID"
+                    ],
+                    y=temporal[
+                        "RollingMean"
+                    ],
+                    mode="lines",
+                    name=(
+                        "10-paper rolling mean"
+                    ),
+                )
+            )
+
+            fig_temporal.update_layout(
+                title=(
+                    "Review Quality Across the "
+                    "AI Scientist Generation Sequence"
+                ),
+                xaxis_title="Paper ID",
+                yaxis_title=(
+                    "Mean reviewer score"
+                ),
+                yaxis=dict(
+                    range=[0, 10]
+                ),
+            )
+
+            st.plotly_chart(
+                fig_temporal,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # CONSENSUS DISTRIBUTION
+            # ========================================================
+
+            col1, col2 = st.columns(
+                2
+            )
+
+            with col1:
+
+                consensus_counts = (
+                    papers[
+                        "ConsensusDecision"
+                    ]
+                    .value_counts()
+                    .reset_index()
+                )
+
+                consensus_counts.columns = [
+                    "Consensus",
+                    "Papers",
+                ]
+
+                fig_consensus = px.bar(
+                    consensus_counts,
+                    x="Consensus",
+                    y="Papers",
+                    text="Papers",
+                    title=(
+                        "Paper-Level Consensus Decisions"
+                    ),
+                )
+
+                fig_consensus.update_layout(
+                    xaxis_title="",
+                    yaxis_title="Papers",
+                )
+
+                st.plotly_chart(
+                    fig_consensus,
+                    use_container_width=True,
+                )
+
+            with col2:
+
+                disagreement_counts = (
+                    papers[
+                        "DisagreementLevel"
+                    ]
+                    .value_counts()
+                    .reindex(
+                        [
+                            "Low",
+                            "Moderate",
+                            "High",
+                        ],
+                        fill_value=0,
+                    )
+                    .reset_index()
+                )
+
+                disagreement_counts.columns = [
+                    "Disagreement",
+                    "Papers",
+                ]
+
+                fig_disagreement_counts = (
+                    px.bar(
+                        disagreement_counts,
+                        x="Disagreement",
+                        y="Papers",
+                        text="Papers",
+                        title=(
+                            "Reviewer Disagreement Distribution"
+                        ),
+                    )
+                )
+
+                st.plotly_chart(
+                    fig_disagreement_counts,
+                    use_container_width=True,
+                )
+
+        # ============================================================
+        # PAPER EXPLORER
+        # ============================================================
+
+        with paper_tab:
+
+            st.subheader(
+                "Paper Review Explorer"
+            )
+
+            st.caption(
+                "Select a paper to compare all of its reviewer "
+                "scores, decisions, strengths, weaknesses, and conclusions."
+            )
+
+            paper_options = {
+                (
+                    f"{row.PaperID} — "
+                    f"{row.PaperTitle}"
+                ):
+                    row.PaperID
+
+                for row
+                in papers.sort_values(
+                    "PaperID"
+                ).itertuples()
+            }
+
+            selected_paper_label = (
+                st.selectbox(
+                    "Select paper",
+                    list(
+                        paper_options.keys()
+                    ),
+                    key=(
+                        "ai_scientist_paper_selector"
+                    ),
+                )
+            )
+
+            selected_paper_id = (
+                paper_options[
+                    selected_paper_label
+                ]
+            )
+
+            selected_reviews = (
+                reviews[
+                    reviews[
+                        "PaperID"
+                    ]
+                    == selected_paper_id
+                ]
+                .copy()
+            )
+
+            selected_summary = (
+                papers[
+                    papers[
+                        "PaperID"
+                    ]
+                    == selected_paper_id
+                ]
+                .iloc[0]
+            )
+
+            st.markdown(
+                f"### Paper {selected_paper_id}"
+            )
+
+            st.write(
+                selected_summary[
+                    "PaperTitle"
+                ]
+            )
+
+            # ========================================================
+            # PAPER SUMMARY METRICS
+            # ========================================================
+
+            metric1, metric2, metric3, metric4, metric5, metric6 = st.columns(
+                6
+            )
+
+            metric1.metric(
+                "Reviewers",
+                int(
+                    selected_summary[
+                        "ReviewerCount"
+                    ]
+                ),
+            )
+
+            metric2.metric(
+                "Mean Score",
+                (
+                    f"{selected_summary['MeanScore']:.2f}"
+                ),
+            )
+
+            metric3.metric(
+                "Median Score",
+                (
+                    f"{selected_summary['MedianScore']:.2f}"
+                ),
+            )
+
+            metric4.metric(
+                "Score Range",
+                (
+                    f"{selected_summary['ScoreRange']:.2f}"
+                ),
+            )
+
+            metric5.metric(
+                "Agreement",
+                (
+                    f"{selected_summary['AgreementRatio']:.0%}"
+                ),
+            )
+
+            metric6.metric(
+                "Consensus",
+                selected_summary[
+                    "ConsensusDecision"
+                ],
+            )
+
+            # ========================================================
+            # REVIEWER SCORE COMPARISON
+            # ========================================================
+
+            col1, col2 = st.columns(
+                [
+                    1.5,
+                    1,
+                ]
+            )
+
+            with col1:
+
+                fig_selected_scores = px.bar(
+                    selected_reviews,
+                    x="ReviewerID",
+                    y="Score",
+                    color="Decision",
+                    text="Score",
+                    hover_data=[
+                        "ReviewerPersona",
+                    ],
+                    category_orders={
+                        "Decision":
+                            decision_order
+                    },
+                    title=(
+                        "Reviewer Scores"
+                    ),
+                )
+
+                fig_selected_scores.update_yaxes(
+                    range=[0, 10]
+                )
+
+                fig_selected_scores.update_layout(
+                    xaxis_title="Reviewer",
+                    yaxis_title="Score",
+                )
+
+                st.plotly_chart(
+                    fig_selected_scores,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # DECISION VOTES
+            # ========================================================
+
+            with col2:
+
+                selected_votes = (
+                    selected_reviews[
+                        "Decision"
+                    ]
+                    .value_counts()
+                    .reindex(
+                        decision_order,
+                        fill_value=0,
+                    )
+                    .reset_index()
+                )
+
+                selected_votes.columns = [
+                    "Decision",
+                    "Votes",
+                ]
+
+                selected_votes = (
+                    selected_votes[
+                        selected_votes[
+                            "Votes"
+                        ] > 0
+                    ]
+                )
+
+                fig_selected_votes = px.bar(
+                    selected_votes,
+                    x="Decision",
+                    y="Votes",
+                    text="Votes",
+                    title=(
+                        "Decision Votes"
+                    ),
+                )
+
+                fig_selected_votes.update_layout(
+                    yaxis=dict(
+                        dtick=1
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig_selected_votes,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # REVIEWER COMPARISON TABLE
+            # ========================================================
+
+            st.markdown(
+                "### Reviewer Comparison"
+            )
+
+            reviewer_comparison = (
+                selected_reviews[
+                    [
+                        "ReviewerID",
+                        "ReviewerPersona",
+                        "Score",
+                        "Decision",
+                        "Relevance",
+                    ]
+                ]
+                .sort_values(
+                    "Score"
+                )
+            )
+
+            st.dataframe(
+                reviewer_comparison,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # ========================================================
+            # FULL REVIEW TEXTS
+            # ========================================================
+
+            st.markdown(
+                "### Full Reviewer Reports"
+            )
+
+            for _, review in (
+                selected_reviews
+                .sort_values(
+                    "Score"
+                )
+                .iterrows()
+            ):
+
+                expander_title = (
+                    f"{review['ReviewerID']} — "
+                    f"{review['ReviewerPersona']} — "
+                    f"{review['Score']:.1f}/10 — "
+                    f"{review['Decision']}"
+                )
+
+                with st.expander(
+                    expander_title,
+                    expanded=False,
+                ):
+
+                    st.markdown(
+                        "#### Summary"
+                    )
+
+                    st.write(
+                        review[
+                            "Summary"
+                        ]
+                    )
+
+                    strength_col, weakness_col = (
+                        st.columns(
+                            2
+                        )
+                    )
+
+                    with strength_col:
+
+                        st.markdown(
+                            "#### Strengths"
+                        )
+
+                        strengths = (
+                            parse_review_list(
+                                review[
+                                    "Strengths"
+                                ]
+                            )
+                        )
+
+                        for strength in strengths:
+                            st.markdown(
+                                f"- {strength}"
+                            )
+
+                    with weakness_col:
+
+                        st.markdown(
+                            "#### Weaknesses"
+                        )
+
+                        weaknesses = (
+                            parse_review_list(
+                                review[
+                                    "Weaknesses"
+                                ]
+                            )
+                        )
+
+                        for weakness in weaknesses:
+                            st.markdown(
+                                f"- {weakness}"
+                            )
+
+                    st.markdown(
+                        "#### Relevance"
+                    )
+
+                    st.write(
+                        review[
+                            "Relevance"
+                        ]
+                    )
+
+                    st.markdown(
+                        "#### Conclusion"
+                    )
+
+                    st.write(
+                        review[
+                            "Conclusion"
+                        ]
+                    )
+
+                    st.markdown(
+                        "---"
+                    )
+
+                    score_col, decision_col = (
+                        st.columns(
+                            2
+                        )
+                    )
+
+                    score_col.metric(
+                        "Reviewer Score",
+                        (
+                            f"{review['Score']:.1f}/10"
+                        ),
+                    )
+
+                    decision_col.metric(
+                        "Decision",
+                        review[
+                            "Decision"
+                        ],
+                    )
+
+        # ============================================================
+        # REVIEWER ANALYSIS
+        # ============================================================
+
+        with reviewer_tab:
+
+            st.subheader(
+                "Reviewer Analysis"
+            )
+
+            st.caption(
+                "Compare reviewer scoring behaviour and decision patterns."
+            )
+
+            # ========================================================
+            # REVIEWER STATISTICS
+            # ========================================================
+
+            reviewer_stats = (
+                reviews.groupby(
+                    [
+                        "ReviewerID",
+                        "ReviewerPersona",
+                    ]
+                )
+                .agg(
+                    Reviews=(
+                        "PaperID",
+                        "count",
+                    ),
+
+                    MeanScore=(
+                        "Score",
+                        "mean",
+                    ),
+
+                    MedianScore=(
+                        "Score",
+                        "median",
+                    ),
+
+                    ScoreStd=(
+                        "Score",
+                        "std",
+                    ),
+
+                    MinScore=(
+                        "Score",
+                        "min",
+                    ),
+
+                    MaxScore=(
+                        "Score",
+                        "max",
+                    ),
+                )
+                .reset_index()
+            )
+
+            reviewer_stats[
+                "ScoreStd"
+            ] = (
+                reviewer_stats[
+                    "ScoreStd"
+                ]
+                .fillna(0)
+            )
+
+            # ========================================================
+            # REVIEWER MEAN SCORE
+            # ========================================================
+
+            fig_reviewer_mean = px.bar(
+                reviewer_stats.sort_values(
+                    "MeanScore"
+                ),
+                x="MeanScore",
+                y="ReviewerID",
+                orientation="h",
+                hover_data=[
+                    "ReviewerPersona",
+                    "Reviews",
+                    "MedianScore",
+                    "ScoreStd",
+                ],
+                title=(
+                    "Average Score by Reviewer"
+                ),
+            )
+
+            fig_reviewer_mean.update_layout(
+                xaxis_title=(
+                    "Mean reviewer score"
+                ),
+                yaxis_title="Reviewer",
+            )
+
+            st.plotly_chart(
+                fig_reviewer_mean,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # SCORE DISTRIBUTION BY PERSONA
+            # ========================================================
+
+            fig_persona_score = px.box(
+                reviews,
+                x="ReviewerPersona",
+                y="Score",
+                points="all",
+                hover_data=[
+                    "ReviewerID",
+                    "PaperID",
+                ],
+                title=(
+                    "Score Distribution by Reviewer Persona"
+                ),
+            )
+
+            fig_persona_score.update_layout(
+                xaxis_title="Reviewer persona",
+                yaxis_title="Score",
+            )
+
+            st.plotly_chart(
+                fig_persona_score,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # REVIEWER DECISION HEATMAP
+            # ========================================================
+
+            reviewer_decision_matrix = (
+                pd.crosstab(
+                    reviews[
+                        "ReviewerID"
+                    ],
+                    reviews[
+                        "Decision"
+                    ],
+                )
+            )
+
+            for decision in decision_order:
+
+                if (
+                    decision
+                    not in
+                    reviewer_decision_matrix.columns
+                ):
+                    reviewer_decision_matrix[
+                        decision
+                    ] = 0
+
+            reviewer_decision_matrix = (
+                reviewer_decision_matrix[
+                    decision_order
+                ]
+            )
+
+            fig_reviewer_heatmap = (
+                px.imshow(
+                    reviewer_decision_matrix,
+                    text_auto=True,
+                    aspect="auto",
+                    title=(
+                        "Reviewer × Decision Heatmap"
+                    ),
+                    labels={
+                        "x":
+                            "Decision",
+
+                        "y":
+                            "Reviewer",
+
+                        "color":
+                            "Number of reviews",
+                    },
+                )
+            )
+
+            st.plotly_chart(
+                fig_reviewer_heatmap,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # PERSONA SUMMARY
+            # ========================================================
+
+            persona_stats = (
+                reviews.groupby(
+                    "ReviewerPersona"
+                )
+                .agg(
+                    Reviews=(
+                        "PaperID",
+                        "count",
+                    ),
+
+                    MeanScore=(
+                        "Score",
+                        "mean",
+                    ),
+
+                    MedianScore=(
+                        "Score",
+                        "median",
+                    ),
+
+                    ScoreStd=(
+                        "Score",
+                        "std",
+                    ),
+                )
+                .reset_index()
+            )
+
+            persona_stats[
+                "MeanScore"
+            ] = (
+                persona_stats[
+                    "MeanScore"
+                ].round(2)
+            )
+
+            persona_stats[
+                "MedianScore"
+            ] = (
+                persona_stats[
+                    "MedianScore"
+                ].round(2)
+            )
+
+            persona_stats[
+                "ScoreStd"
+            ] = (
+                persona_stats[
+                    "ScoreStd"
+                ].fillna(0).round(2)
+            )
+
+            st.markdown(
+                "### Reviewer Persona Statistics"
+            )
+
+            st.dataframe(
+                persona_stats.sort_values(
+                    "MeanScore"
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # ============================================================
+        # CONSENSUS & DISAGREEMENT
+        # ============================================================
+
+        with disagreement_tab:
+
+            st.subheader(
+                "Consensus & Disagreement"
+            )
+
+            st.caption(
+                "Identify papers where reviewers strongly disagree and "
+                "where additional human review may be most useful."
+            )
+
+            unanimous_papers = (
+                papers[
+                    papers[
+                        "AgreementRatio"
+                    ]
+                    == 1.0
+                ]
+            )
+
+            split_papers = (
+                papers[
+                    papers[
+                        "ConsensusDecision"
+                    ]
+                    == "Split"
+                ]
+            )
+
+            high_disagreement_papers = (
+                papers[
+                    papers[
+                        "DisagreementLevel"
+                    ]
+                    == "High"
+                ]
+            )
+
+            metric1, metric2, metric3, metric4 = st.columns(
+                4
+            )
+
+            metric1.metric(
+                "Unanimous Papers",
+                len(
+                    unanimous_papers
+                ),
+            )
+
+            metric2.metric(
+                "Split Decisions",
+                len(
+                    split_papers
+                ),
+            )
+
+            metric3.metric(
+                "High Disagreement",
+                len(
+                    high_disagreement_papers
+                ),
+            )
+
+            metric4.metric(
+                "Average Score Range",
+                (
+                    f"{papers['ScoreRange'].mean():.2f}"
+                ),
+            )
+
+            # ========================================================
+            # DISAGREEMENT SCATTER
+            # ========================================================
+
+            fig_disagreement_map = (
+                px.scatter(
+                    papers,
+                    x="MeanScore",
+                    y="ScoreRange",
+                    size="ReviewerCount",
+                    color="DisagreementLevel",
+                    hover_name="PaperTitle",
+                    hover_data={
+                        "PaperID":
+                            True,
+
+                        "MeanScore":
+                            ":.2f",
+
+                        "ScoreRange":
+                            ":.2f",
+
+                        "ScoreStd":
+                            ":.2f",
+
+                        "ReviewerCount":
+                            True,
+
+                        "ConsensusDecision":
+                            True,
+
+                        "AgreementRatio":
+                            ":.0%",
+                    },
+                    category_orders={
+                        "DisagreementLevel":
+                            [
+                                "Low",
+                                "Moderate",
+                                "High",
+                            ]
+                    },
+                    title=(
+                        "Paper Quality vs Reviewer Disagreement"
+                    ),
+                    labels={
+                        "MeanScore":
+                            "Mean reviewer score",
+
+                        "ScoreRange":
+                            "Reviewer score range",
+                    },
+                )
+            )
+
+            fig_disagreement_map.add_hline(
+                y=2.0,
+                line_dash="dash",
+                annotation_text=(
+                    "High disagreement"
+                ),
+            )
+
+            st.plotly_chart(
+                fig_disagreement_map,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # SCORE RANGE + AGREEMENT DISTRIBUTIONS
+            # ========================================================
+
+            col1, col2 = st.columns(
+                2
+            )
+
+            with col1:
+
+                fig_score_range = (
+                    px.histogram(
+                        papers,
+                        x="ScoreRange",
+                        nbins=15,
+                        title=(
+                            "Reviewer Score Range Distribution"
+                        ),
+                    )
+                )
+
+                fig_score_range.update_layout(
+                    xaxis_title=(
+                        "Highest score − lowest score"
+                    ),
+                    yaxis_title="Papers",
+                )
+
+                st.plotly_chart(
+                    fig_score_range,
+                    use_container_width=True,
+                )
+
+            with col2:
+
+                agreement_distribution = (
+                    papers[
+                        "AgreementRatio"
+                    ]
+                    .round(2)
+                    .value_counts()
+                    .sort_index()
+                    .reset_index()
+                )
+
+                agreement_distribution.columns = [
+                    "Agreement",
+                    "Papers",
+                ]
+
+                fig_agreement = px.bar(
+                    agreement_distribution,
+                    x="Agreement",
+                    y="Papers",
+                    text="Papers",
+                    title=(
+                        "Reviewer Decision Agreement"
+                    ),
+                )
+
+                fig_agreement.update_layout(
+                    xaxis_tickformat=".0%",
+                    xaxis_title=(
+                        "Largest decision vote share"
+                    ),
+                    yaxis_title="Papers",
+                )
+
+                st.plotly_chart(
+                    fig_agreement,
+                    use_container_width=True,
+                )
+
+            # ========================================================
+            # TOP DISAGREEMENT PAPERS
+            # ========================================================
+
+            st.markdown(
+                "### Most Controversial Papers"
+            )
+
+            top_disagreement = (
+                papers.sort_values(
+                    [
+                        "HumanAttentionScore",
+                        "ScoreRange",
+                    ],
+                    ascending=False,
+                )
+                .head(15)
+            )
+
+            fig_top_disagreement = (
+                px.bar(
+                    top_disagreement.sort_values(
+                        "ScoreRange"
+                    ),
+                    x="ScoreRange",
+                    y="PaperTitle",
+                    orientation="h",
+                    color="DisagreementLevel",
+                    hover_data={
+                        "PaperID":
+                            True,
+
+                        "MeanScore":
+                            ":.2f",
+
+                        "ConsensusDecision":
+                            True,
+
+                        "AgreementRatio":
+                            ":.0%",
+                    },
+                    title=(
+                        "Papers with the Largest Reviewer Disagreement"
+                    ),
+                )
+            )
+
+            fig_top_disagreement.update_layout(
+                xaxis_title=(
+                    "Reviewer score range"
+                ),
+                yaxis_title="",
+            )
+
+            st.plotly_chart(
+                fig_top_disagreement,
+                use_container_width=True,
+            )
+
+            # ========================================================
+            # HUMAN ATTENTION TABLE
+            # ========================================================
+
+            st.markdown(
+                "### Human Review Priority"
+            )
+
+            st.caption(
+                "This score reflects reviewer disagreement only. "
+                "It is not an acceptance or rejection prediction."
+            )
+
+            attention_table = (
+                papers[
+                    [
+                        "PaperID",
+                        "PaperTitle",
+                        "ReviewerCount",
+                        "MeanScore",
+                        "MinScore",
+                        "MaxScore",
+                        "ScoreRange",
+                        "ScoreStd",
+                        "ConsensusDecision",
+                        "AgreementRatio",
+                        "DisagreementLevel",
+                        "HumanAttentionScore",
+                    ]
+                ]
+                .sort_values(
+                    "HumanAttentionScore",
+                    ascending=False,
+                )
+                .copy()
+            )
+
+            numeric_columns = [
+                "MeanScore",
+                "MinScore",
+                "MaxScore",
+                "ScoreRange",
+                "ScoreStd",
+            ]
+
+            for column in numeric_columns:
+                attention_table[
+                    column
+                ] = (
+                    attention_table[
+                        column
+                    ].round(2)
+                )
+
+            attention_table[
+                "HumanAttentionScore"
+            ] = (
+                attention_table[
+                    "HumanAttentionScore"
+                ].round(3)
+            )
+
+            st.dataframe(
+                attention_table,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "AgreementRatio":
+                        st.column_config.ProgressColumn(
+                            "Reviewer Agreement",
+                            min_value=0.0,
+                            max_value=1.0,
+                            format="%.0f%%",
+                        ),
+
+                    "HumanAttentionScore":
+                        st.column_config.ProgressColumn(
+                            "Human Review Priority",
+                            min_value=0.0,
+                            max_value=1.0,
+                            format="%.2f",
+                        ),
+                },
+            )
+
+            # ========================================================
+            # DECISION VOTE COMPOSITION
+            # ========================================================
+
+            st.markdown(
+                "### Reviewer Vote Composition by Paper"
+            )
+
+            vote_data = (
+                papers[
+                    [
+                        "PaperID",
+                        "PaperTitle",
+                        "RejectVotes",
+                        "MajorRevisionVotes",
+                        "MinorRevisionVotes",
+                        "AcceptVotes",
+                    ]
+                ]
+                .sort_values(
+                    "PaperID"
+                )
+            )
+
+            vote_long = (
+                vote_data.melt(
+                    id_vars=[
+                        "PaperID",
+                        "PaperTitle",
+                    ],
+                    value_vars=[
+                        "RejectVotes",
+                        "MajorRevisionVotes",
+                        "MinorRevisionVotes",
+                        "AcceptVotes",
+                    ],
+                    var_name="Decision",
+                    value_name="Votes",
+                )
+            )
+
+            vote_name_map = {
+                "RejectVotes":
+                    "Reject",
+
+                "MajorRevisionVotes":
+                    "Major Revision",
+
+                "MinorRevisionVotes":
+                    "Minor Revision",
+
+                "AcceptVotes":
+                    "Accept",
+            }
+
+            vote_long[
+                "Decision"
+            ] = (
+                vote_long[
+                    "Decision"
+                ].map(
+                    vote_name_map
+                )
+            )
+
+            fig_vote_composition = (
+                px.bar(
+                    vote_long,
+                    x="PaperID",
+                    y="Votes",
+                    color="Decision",
+                    category_orders={
+                        "Decision":
+                            decision_order
+                    },
+                    title=(
+                        "Reviewer Decision Composition Across Papers"
+                    ),
+                    hover_data=[
+                        "PaperTitle",
+                    ],
+                )
+            )
+
+            fig_vote_composition.update_layout(
+                barmode="stack",
+                xaxis_title="Paper ID",
+                yaxis_title="Reviewer votes",
+            )
+
+            st.plotly_chart(
+                fig_vote_composition,
+                use_container_width=True,
+            )
+
+        # ============================================================
+        # DOWNLOAD PAPER-LEVEL ANALYTICS
+        # ============================================================
+
+        st.divider()
+
+        paper_analytics_csv = (
+            papers.to_csv(
+                index=False
+            )
+            .encode(
+                "utf-8"
+            )
+        )
+
+        st.download_button(
+            label=(
+                "Download AI Scientist Paper Analytics"
+            ),
+            data=paper_analytics_csv,
+            file_name=(
+                "AI_Scientist_Paper_Analytics.csv"
+            ),
+            mime="text/csv",
+            key=(
+                "ai_scientist_download"
+            ),
+        )
