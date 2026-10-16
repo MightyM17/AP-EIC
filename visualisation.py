@@ -8,6 +8,7 @@
 #   pip install streamlit pandas numpy plotly scipy openpyxl
 #   streamlit run app.py
 
+from pathlib import Path
 import io
 import math
 import warnings
@@ -507,7 +508,8 @@ nav_options = [
     "AE timeline",
     "Paper status overview",
     "Recommendation Center",
-    "AI Scientist"
+    "AI Scientist",
+    "Comparision"
 ]
 
 # ✅ ONLY override when coming from AE click
@@ -7226,4 +7228,471 @@ if selected_tab == "AI Scientist":
             key=(
                 "ai_scientist_download"
             ),
+        )
+
+if selected_tab == "Comparision":
+    # ============================================================
+    # SOURCE COMPARISON
+    # AI Scientist review vs Stanford AI Reviewer review
+    # ============================================================
+
+    st.subheader("Source Comparison")
+
+    st.caption(
+        "Compare persona-conditioned reviews generated for the same papers "
+        "when the upstream review evidence comes from the AI Scientist corpus "
+        "versus Stanford AI Reviewer."
+    )
+
+    comparison_dir = Path(
+        "/Users/mithilbavishi/Desktop/Mithil/AI_Scientist/source_comparison_experiment/outputs"
+    )
+
+    reviews_file = comparison_dir / "SourceComparisonReviews.csv"
+    pairs_file = comparison_dir / "SourceComparisonPairs.csv"
+    paper_summary_file = comparison_dir / "SourceComparisonPaperSummary.csv"
+    persona_file = comparison_dir / "PersonaSourceSensitivity.csv"
+
+    required_files = [
+        reviews_file,
+        pairs_file,
+        paper_summary_file,
+        persona_file,
+    ]
+
+    missing = [p.name for p in required_files if not p.exists()]
+
+    if missing:
+        st.info(
+            "Run source_comparison_pipeline.py first. Missing: "
+            + ", ".join(missing)
+        )
+    else:
+        source_reviews = pd.read_csv(reviews_file)
+        source_pairs = pd.read_csv(pairs_file)
+        source_summary = pd.read_csv(paper_summary_file)
+        persona_sensitivity = pd.read_csv(persona_file)
+
+        # ========================================================
+        # TOP KPIs
+        # ========================================================
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+
+        k1.metric(
+            "Papers",
+            source_reviews["PaperID"].nunique(),
+        )
+
+        k2.metric(
+            "Generated Reviews",
+            len(source_reviews),
+        )
+
+        k3.metric(
+            "Personas",
+            source_reviews["ReviewerID"].nunique(),
+        )
+
+        decision_agreement = (
+            1 - source_pairs["DecisionChanged"].mean()
+            if len(source_pairs)
+            else 0
+        )
+
+        k4.metric(
+            "Decision Agreement",
+            f"{decision_agreement:.1%}",
+        )
+
+        mean_abs_shift = (
+            source_pairs["AbsScoreDelta"].mean()
+            if len(source_pairs)
+            else 0
+        )
+
+        k5.metric(
+            "Mean |Score Shift|",
+            f"{mean_abs_shift:.2f}",
+        )
+
+        st.divider()
+
+        # ========================================================
+        # PAPER SELECTOR
+        # ========================================================
+
+        paper_lookup = (
+            source_reviews[["PaperID", "PaperTitle"]]
+            .drop_duplicates()
+            .sort_values("PaperID")
+        )
+
+        paper_options = {
+            f"{int(r.PaperID)} — {r.PaperTitle}": int(r.PaperID)
+            for r in paper_lookup.itertuples()
+        }
+
+        selected_paper_label = st.selectbox(
+            "Select paper",
+            list(paper_options.keys()),
+            key="source_comparison_paper",
+        )
+
+        selected_paper = paper_options[selected_paper_label]
+
+        paper_reviews = source_reviews[
+            source_reviews["PaperID"] == selected_paper
+        ].copy()
+
+        paper_pairs = source_pairs[
+            source_pairs["PaperID"] == selected_paper
+        ].copy()
+
+        paper_summary = source_summary[
+            source_summary["PaperID"] == selected_paper
+        ].copy()
+
+        # ========================================================
+        # SOURCE-LEVEL SUMMARY
+        # ========================================================
+
+        st.markdown("### Source-Level Review Outcomes")
+
+        summary_display = paper_summary[
+            [
+                "SourceCondition",
+                "ReviewerCount",
+                "MeanScore",
+                "ScoreStd",
+                "ScoreRange",
+                "DecisionDiversity",
+                "ConsensusDecision",
+                "AgreementRatio",
+            ]
+        ].copy()
+
+        for col in ["MeanScore", "ScoreStd", "ScoreRange"]:
+            summary_display[col] = summary_display[col].round(2)
+
+        st.dataframe(
+            summary_display,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # ========================================================
+        # SCORE DISTRIBUTIONS BY SOURCE
+        # ========================================================
+
+        left, right = st.columns(2)
+
+        with left:
+            fig_scores = px.box(
+                paper_reviews,
+                x="SourceCondition",
+                y="Score",
+                points="all",
+                hover_data=[
+                    "ReviewerID",
+                    "ReviewerPersona",
+                    "Decision",
+                ],
+                title="Reviewer Score Distribution by Source",
+                labels={
+                    "SourceCondition": "Source",
+                    "Score": "Reviewer score",
+                },
+            )
+
+            fig_scores.update_yaxes(range=[1, 10])
+
+            st.plotly_chart(
+                fig_scores,
+                use_container_width=True,
+            )
+
+        with right:
+            decision_counts = (
+                paper_reviews.groupby(
+                    ["SourceCondition", "Decision"]
+                )
+                .size()
+                .reset_index(name="Reviews")
+            )
+
+            fig_decisions = px.bar(
+                decision_counts,
+                x="SourceCondition",
+                y="Reviews",
+                color="Decision",
+                barmode="stack",
+                title="Decision Distribution by Source",
+                labels={"SourceCondition": "Source"},
+            )
+
+            st.plotly_chart(
+                fig_decisions,
+                use_container_width=True,
+            )
+
+        # ========================================================
+        # PAIRED PERSONA SCORE SHIFTS
+        # ========================================================
+
+        # st.markdown("### Same Persona, Different Review Source")
+
+        # paired_long = paper_pairs.melt(
+        #     id_vars=[
+        #         "ReviewerID",
+        #         "ReviewerPersona",
+        #     ],
+        #     value_vars=[
+        #         "AIScientistScore",
+        #         "StanfordScore",
+        #     ],
+        #     var_name="Source",
+        #     value_name="Score",
+        # )
+
+        # paired_long["Source"] = paired_long["Source"].map(
+        #     {
+        #         "AIScientistScore": "AI Scientist",
+        #         "StanfordScore": "Stanford AI Reviewer",
+        #     }
+        # )
+
+        # fig_pair = px.line(
+        #     paired_long,
+        #     x="Source",
+        #     y="Score",
+        #     color="ReviewerID",
+        #     markers=True,
+        #     hover_data=["ReviewerPersona"],
+        #     title="Persona-Level Score Shift",
+        # )
+
+        # fig_pair.update_yaxes(range=[1, 10])
+
+        # st.plotly_chart(
+        #     fig_pair,
+        #     use_container_width=True,
+        # )
+
+        # ========================================================
+        # SCORE DELTA BY PERSONA
+        # ========================================================
+
+        delta_plot = paper_pairs.sort_values(
+            "ScoreDelta_StanfordMinusAI"
+        )
+
+        fig_delta = px.bar(
+            delta_plot,
+            x="ScoreDelta_StanfordMinusAI",
+            y="ReviewerID",
+            orientation="h",
+            hover_data=[
+                "ReviewerPersona",
+                "AIScientistScore",
+                "StanfordScore",
+                "AIScientistDecision",
+                "StanfordDecision",
+            ],
+            title=(
+                "Score Change by Persona "
+                "(Stanford − AI Scientist)"
+            ),
+            labels={
+                "ScoreDelta_StanfordMinusAI": "Score delta",
+                "ReviewerID": "Reviewer",
+            },
+        )
+
+        fig_delta.add_vline(
+            x=0,
+            line_dash="dash",
+        )
+
+        st.plotly_chart(
+            fig_delta,
+            use_container_width=True,
+        )
+
+        # ========================================================
+        # DECISION TRANSITIONS
+        # ========================================================
+
+        st.markdown("### Decision Transitions")
+
+        transition = pd.crosstab(
+            paper_pairs["AIScientistDecision"],
+            paper_pairs["StanfordDecision"],
+        )
+
+        fig_transition = px.imshow(
+            transition,
+            text_auto=True,
+            aspect="auto",
+            labels={
+                "x": "Stanford-source decision",
+                "y": "AI-Scientist-source decision",
+                "color": "Persona count",
+            },
+            title="Decision Transition Matrix",
+        )
+
+        st.plotly_chart(
+            fig_transition,
+            use_container_width=True,
+        )
+
+        # ========================================================
+        # CONTENT OVERLAP
+        # ========================================================
+
+        left, right = st.columns(2)
+
+        with left:
+            fig_weakness_overlap = px.bar(
+                paper_pairs.sort_values("WeaknessJaccard"),
+                x="WeaknessJaccard",
+                y="ReviewerID",
+                orientation="h",
+                hover_data=["ReviewerPersona"],
+                title="Weakness Overlap Across Sources",
+                labels={
+                    "WeaknessJaccard": "Lexical Jaccard similarity",
+                    "ReviewerID": "Reviewer",
+                },
+            )
+
+            st.plotly_chart(
+                fig_weakness_overlap,
+                use_container_width=True,
+            )
+
+        with right:
+            fig_strength_overlap = px.bar(
+                paper_pairs.sort_values("StrengthJaccard"),
+                x="StrengthJaccard",
+                y="ReviewerID",
+                orientation="h",
+                hover_data=["ReviewerPersona"],
+                title="Strength Overlap Across Sources",
+                labels={
+                    "StrengthJaccard": "Lexical Jaccard similarity",
+                    "ReviewerID": "Reviewer",
+                },
+            )
+
+            st.plotly_chart(
+                fig_strength_overlap,
+                use_container_width=True,
+            )
+
+        # ========================================================
+        # REVIEWER-BY-REVIEWER SIDE-BY-SIDE EXPLORER
+        # ========================================================
+
+        st.markdown("### Reviewer-by-Reviewer Comparison")
+
+        reviewer_options = {
+            f"{r.ReviewerID} — {r.ReviewerPersona}": r.ReviewerID
+            for r in (
+                paper_reviews[["ReviewerID", "ReviewerPersona"]]
+                .drop_duplicates()
+                .sort_values("ReviewerID")
+                .itertuples()
+            )
+        }
+
+        selected_reviewer_label = st.selectbox(
+            "Reviewer persona",
+            list(reviewer_options.keys()),
+            key="source_comparison_reviewer",
+        )
+
+        selected_reviewer = reviewer_options[selected_reviewer_label]
+
+        reviewer_rows = paper_reviews[
+            paper_reviews["ReviewerID"] == selected_reviewer
+        ].set_index("SourceCondition")
+
+        source_a = reviewer_rows.loc["AI_Scientist"]
+        source_b = reviewer_rows.loc["Stanford_AI_Reviewer"]
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.markdown("#### AI Scientist review source")
+            st.metric("Score", f"{source_a['Score']:.1f}/10")
+            st.write(f"**Decision:** {source_a['Decision']}")
+            st.write("**Summary**")
+            st.write(source_a["Summary"])
+            st.write("**Strengths**")
+            st.write(source_a["Strengths"])
+            st.write("**Weaknesses**")
+            st.write(source_a["Weaknesses"])
+            st.write("**Relevance**")
+            st.write(source_a["Relevance"])
+            st.write("**Conclusion**")
+            st.write(source_a["Conclusion"])
+
+        with col_b:
+            st.markdown("#### Stanford AI Reviewer source")
+            st.metric("Score", f"{source_b['Score']:.1f}/10")
+            st.write(f"**Decision:** {source_b['Decision']}")
+            st.write("**Summary**")
+            st.write(source_b["Summary"])
+            st.write("**Strengths**")
+            st.write(source_b["Strengths"])
+            st.write("**Weaknesses**")
+            st.write(source_b["Weaknesses"])
+            st.write("**Relevance**")
+            st.write(source_b["Relevance"])
+            st.write("**Conclusion**")
+            st.write(source_b["Conclusion"])
+
+        # ========================================================
+        # ACROSS-ALL-PAPERS PERSONA SENSITIVITY
+        # ========================================================
+
+        st.markdown("### Which Personas Are Most Source-Sensitive?")
+
+        fig_sensitivity = px.bar(
+            persona_sensitivity.sort_values("MeanAbsScoreDelta"),
+            x="MeanAbsScoreDelta",
+            y="ReviewerID",
+            orientation="h",
+            hover_data=[
+                "ReviewerPersona",
+                "ReviewerBand",
+                "DecisionFlipRate",
+                "MeanWeaknessJaccard",
+            ],
+            title="Mean Absolute Score Shift Across the Three Papers",
+            labels={
+                "MeanAbsScoreDelta": "Mean absolute score shift",
+                "ReviewerID": "Reviewer",
+            },
+        )
+
+        st.plotly_chart(
+            fig_sensitivity,
+            use_container_width=True,
+        )
+
+        persona_table = persona_sensitivity.copy()
+        persona_table["DecisionFlipRate"] = (
+            persona_table["DecisionFlipRate"] * 100
+        ).round(1)
+
+        st.dataframe(
+            persona_table.sort_values(
+                "MeanAbsScoreDelta",
+                ascending=False,
+            ),
+            use_container_width=True,
+            hide_index=True,
         )
