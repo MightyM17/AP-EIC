@@ -1,0 +1,9 @@
+MessageID,CreatedAt,PaperID,AssignmentID,FromEditorID,ToReviewerID,CCEditorID,Tone,Scenario,Subject,Body
+MSG-7d0ef456,2026-10-23T00:07:04.087600,93,A-093-01,AE_033,R002,EIC_05,Professional,Final overdue reminder + replacement,Final reminder: review for Manuscript 93,"Dear Reviewer R002,
+
+The review for “DETERMINISTIC MEMORY FUSION FOR LONG-HORIZON CONVERSATIONAL AGENTS” is now 135 day(s) overdue. If you can still complete the review, please confirm immediately. Otherwise, we will reassign the review to avoid further delay. We are also preparing to invite R009 as a replacement reviewer.
+
+CC: EIC_05
+
+Best regards,
+AE_033"

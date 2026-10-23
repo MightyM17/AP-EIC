@@ -1,0 +1,12 @@
+{
+  "build_version": "2.0",
+  "workflow_source": "/Users/mithilbavishi/Desktop/Mithil/SBU/Sem 2/AP/EIC-AIssist_peer_review_synth_v12.xlsx",
+  "paper_reviews_source": "/Users/mithilbavishi/Desktop/Mithil/SBU/Sem 2/AP/PaperReviews.csv",
+  "personas_source": "/Users/mithilbavishi/Desktop/Mithil/AI_Scientist/Reviewers.csv",
+  "papers_built": 103,
+  "assignments_built": 532,
+  "reviews_built": 311,
+  "random_seed": 42,
+  "simulation_reference_date": "2026-10-15",
+  "scenario_rows": 103
+}

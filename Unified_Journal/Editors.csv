@@ -1,0 +1,45 @@
+EditorID,Role,JournalSection,PaperCount
+AE_001,AE,AI/ML,2
+AE_002,AE,AI/ML,4
+AE_004,AE,AI/ML,3
+AE_005,AE,Bioinformatics,2
+AE_006,AE,AI/ML,2
+AE_007,AE,HCI,1
+AE_008,AE,AI/ML,3
+AE_010,AE,AI/ML,2
+AE_011,AE,Data Science,1
+AE_012,AE,Theory,3
+AE_013,AE,AI/ML,2
+AE_014,AE,AI/ML,2
+AE_015,AE,AI/ML,3
+AE_016,AE,HCI,1
+AE_017,AE,Systems,2
+AE_018,AE,Bioinformatics,2
+AE_019,AE,Bioinformatics,1
+AE_020,AE,Data Science,5
+AE_021,AE,AI/ML,2
+AE_022,AE,Bioinformatics,1
+AE_023,AE,Theory,1
+AE_024,AE,Bioinformatics,2
+AE_025,AE,Theory,9
+AE_026,AE,AI/ML,3
+AE_027,AE,Systems,3
+AE_028,AE,AI/ML,7
+AE_029,AE,AI/ML,6
+AE_030,AE,AI/ML,2
+AE_031,AE,Systems,3
+AE_032,AE,AI/ML,6
+AE_033,AE,Systems,4
+AE_034,AE,AI/ML,2
+AE_035,AE,AI/ML,2
+AE_036,AE,Bioinformatics,1
+AE_037,AE,HCI,2
+AE_038,AE,Bioinformatics,2
+AE_039,AE,Bioinformatics,2
+AE_040,AE,Data Science,2
+EIC_01,EIC,AI/ML,22
+EIC_02,EIC,Systems,17
+EIC_03,EIC,AI/ML,16
+EIC_04,EIC,Theory,17
+EIC_05,EIC,AI/ML,9
+EIC_06,EIC,Bioinformatics,22

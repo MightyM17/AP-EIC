@@ -1,0 +1,26 @@
+ReviewerID,ReviewerPersona,ReviewerFocus,ReviewerBias,ReviewerBand,ReviewerType,ReviewerReliabilityTier,ReviewerWorkloadAtInvite,ReviewerRole,ReviewsSubmitted,MeanScore,MedianScore,ScoreStd
+R001,Methodology skeptic,methodology and experimental validity,-0.9,strict,reliable_fast,high,5,Peer Reviewer,20,4.1899999999999995,4.3,0.6876772498781678
+R002,Statistical rigor reviewer,"statistics, robustness and controls",-0.8,strict,reliable_on_time,high,2,Peer Reviewer,11,4.336363636363637,4.3,0.3937528695946857
+R003,High-bar conference reviewer,evidence and publication readiness,-1.0,strict,late_reviewer,medium,0,Peer Reviewer,19,4.252631578947368,4.4,0.6572417812363804
+R004,Adversarial reviewer,"confounds, unsupported claims and missing controls",-1.1,strict,reliable_fast,high,3,Peer Reviewer,18,3.8833333333333337,4.1,0.7220726340811491
+R005,Generalization reviewer,generalization across settings,-0.8,strict,reliable_on_time,high,1,Peer Reviewer,11,4.390909090909091,4.5,0.5299306051559881
+R006,Reproducibility reviewer,reproducibility and implementation detail,-0.7,strict,reliable_on_time,high,1,Peer Reviewer,19,4.373684210526315,4.5,0.6007382346686432
+R007,Broad ML reviewer,overall contribution and significance,0.0,balanced,reliable_on_time,high,2,Peer Reviewer,23,4.943478260869566,5.2,0.6806812999753306
+R008,Technical soundness reviewer,correctness and assumptions,-0.1,balanced,reliable_fast,high,2,Peer Reviewer,16,4.7625,5.05,0.7347406004842797
+R009,Empirical ML reviewer,experimental evidence,0.0,balanced,reliable_on_time,high,0,Peer Reviewer,13,4.892307692307693,5.1,0.653348226694956
+R010,Clarity reviewer,clarity and presentation,0.1,balanced,late_acceptor,medium,3,Peer Reviewer,19,5.1947368421052635,5.2,0.7096876141622389
+R011,Benchmark reviewer,"baselines, benchmarks and metrics",-0.1,balanced,reliable_on_time,high,8,Peer Reviewer,17,4.923529411764706,5.1,0.6412574152899598
+R012,Area-chair style reviewer,"novelty, rigor and significance",0.0,balanced,reliable_on_time,high,9,Peer Reviewer,14,5.1499999999999995,5.25,0.7208625785424413
+R013,Constructive senior reviewer,scientific merit and fixable weaknesses,0.8,positive,reliable_on_time,high,0,Peer Reviewer,19,5.947368421052632,6.0,0.4848965392118324
+R014,Novelty reviewer,originality and potential,0.8,positive,reliable_on_time,high,0,Peer Reviewer,15,5.760000000000001,5.8,0.47300458066844686
+R015,Practical reviewer,practical value and deployability,0.7,positive,reliable_on_time,high,0,Peer Reviewer,14,5.3999999999999995,5.7,0.7492853738253346
+R016,Impact reviewer,importance and potential impact,0.9,positive,late_acceptor,medium,1,Peer Reviewer,17,5.882352941176471,6.1,0.6109157004690456
+R017,Positive but demanding reviewer,promising contributions and revisions,0.7,positive,reliable_fast,high,0,Peer Reviewer,15,5.819999999999999,5.9,0.7449384762068163
+R018,Emerging-ideas reviewer,new directions and future potential,1.0,positive,reliable_on_time,high,4,Peer Reviewer,16,6.375,6.35,0.46703854230673514
+R027,Safety and limitations reviewer,Overall scientific quality,0.0,Balanced,reliable_fast,high,3,Peer Reviewer,2,5.5,5.5,0.5
+R025,Constructive empirical reviewer,Overall scientific quality,0.0,Balanced,reliable_fast,high,2,Peer Reviewer,2,5.5,5.5,0.5
+R030,High-bar conference reviewer,Overall scientific quality,0.0,Balanced,reliable_on_time,high,3,Peer Reviewer,5,3.4,3.0,0.4898979485566356
+R020,Balanced area-chair-style reviewer,Overall scientific quality,0.0,Balanced,reliable_on_time,high,3,Peer Reviewer,2,6.0,6.0,0.0
+R023,Impact-oriented reviewer,Overall scientific quality,0.0,Balanced,reliable_fast,high,3,Peer Reviewer,2,7.0,7.0,0.0
+R022,Empirical ML reviewer,Overall scientific quality,0.0,Balanced,reliable_on_time,high,0,Peer Reviewer,1,5.5,5.5,0.0
+R024,Adversarial reviewer,Overall scientific quality,0.0,Balanced,reliable_fast,high,7,Peer Reviewer,1,3.0,3.0,0.0
